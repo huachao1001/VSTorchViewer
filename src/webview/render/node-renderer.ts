@@ -21,7 +21,7 @@ export class NodeRenderer {
     return g;
   }
 
-  // 输入/输出：药丸形
+  // 输入/输出：药丸形 + 内嵌虚线框（引文双线效果），名称加「」引用号
   private buildIO(g: SVGGElement, nd: GNode, color: string): SVGGElement {
     const head = nd.kind === 'placeholder' ? '输入 · ' : '输出 · ';
     g.appendChild(
@@ -36,12 +36,27 @@ export class NodeRenderer {
         class: 'io-pill',
       })
     );
+    g.appendChild(
+      el('rect', {
+        x: 3,
+        y: 3,
+        width: (nd.w! - 6).toFixed(1),
+        height: (nd.h! - 6).toFixed(1),
+        rx: (nd.h! - 6) / 2,
+        fill: 'none',
+        stroke: color,
+        'stroke-opacity': 0.4,
+        'stroke-dasharray': '3 3',
+        class: 'io-inner',
+      })
+    );
     const shp = shapeStr(nd);
     const cy = shp ? 16 : nd.h! / 2 + 4;
+    const maxName = nd.w! - 20 - textW(head, FONT_NAME) - textW('「」', FONT_NAME);
     const t = el('text', { x: (nd.w! / 2).toFixed(1), y: cy.toFixed(1), 'text-anchor': 'middle', class: 'io-text' });
     t.style.font = FONT_NAME;
     t.setAttribute('fill', color);
-    t.textContent = head + truncate(nd.name || '', FONT_NAME, nd.w! - 20);
+    t.textContent = head + '「' + truncate(nd.name || '', FONT_NAME, maxName) + '」';
     g.appendChild(t);
     if (shp) {
       const t2 = el('text', { x: (nd.w! / 2).toFixed(1), y: 30, 'text-anchor': 'middle', class: 'io-text' });

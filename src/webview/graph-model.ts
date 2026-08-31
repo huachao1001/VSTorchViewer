@@ -4,6 +4,7 @@
 import dagre from '@dagrejs/dagre';
 import type { Chain, GEdge, GNode, GraphData, Panel, Pt, ResolvedSelection, Selection } from './types';
 import { sizeNode } from './node-metrics';
+import { EdgeRouter } from './router/edge-router';
 
 // 缩放下限：保证卡片文字可读（12px→9.6px、10.5px→8.4px），禁止缩得更小
 export const K_MIN = 0.8;
@@ -25,11 +26,11 @@ export class GraphModel {
   panels: Panel[] = [];
   fullNodes: GNode[] = [];
   fullIdx = new Map<number, GNode>();
+  fullChains: Chain[] = [];
   // 纯传递前缀（只含 1 个子组合、自身无算子）→ 不显示背景盒；折叠时下钻到唯一孩子
   private omit = new Set<string>();
   private omitChild = new Map<string, string>();
-  // 当前的排带（finalizeLayout 位移后的几何），供连线避障路由使用
-  private bands: { top: number; bottom: number }[] = [];
+  // 当前各排的排号（finalizeLayout 位移后仍成立），供连线路由判定回边
   private rankOf = new Map<number, number>();
   // 全细节 dagre 布局的中心（一次性缓存）：所有层级对齐到它，保证跨层级内容稳定、缩放往返可逆
   private fullRef: Pt | null = null;
@@ -103,11 +104,11 @@ export class GraphModel {
   private buildLevelView(depth: number): void {
     const src = this.data!;
     if (depth === Infinity) {
+      // 全细节：布局与连线在 layoutFull 一次性完成（零位移，路由点原生有效）
       this.nodes = this.fullNodes;
-      this.idx = new Map(this.nodes.map(n => [n.id, n]));
-      this.finalizeLayout(Math.max(0, ...src.nodes.filter(n => n.group).map(n => n.group!.split('.').length)));
-      this.alignToRef(); // finalize 会移动节点，重新对齐到固定参考中心
-      this.chains = this.routeEdges(src.edges);
+      this.idx = this.fullIdx;
+      this.chains = this.fullChains;
+      this.computePanels(Math.max(0, ...src.nodes.filter(n => n.group).map(n => n.group!.split('.').length)));
       return;
     }
 
@@ -220,26 +221,21 @@ export class GraphModel {
       aggEdges.push({ src: s, dst: d });
     }
 
-    // 紧凑 dagre 重排
-    const g = new dagre.graphlib.Graph();
-    g.setGraph({ rankdir: 'TB', nodesep: 28, edgesep: 10, ranksep: 46, marginx: 0, marginy: 0 });
-    g.setDefaultNodeLabel(() => ({}));
-    g.setDefaultEdgeLabel(() => ({}));
-    this.nodes.forEach(nd => g.setNode(String(nd.id), { width: nd.w!, height: nd.h! }));
-    aggEdges.forEach(e => g.setEdge(String(e.src), String(e.dst)));
-    dagre.layout(g);
-    this.nodes.forEach(nd => {
-      const pos = g.node(String(nd.id));
-      nd.x = pos.x - nd.w! / 2;
-      nd.y = pos.y - nd.h! / 2;
-    });
+    // 紧凑 dagre 重排 + 背景盒填充烘焙（两遍布局，布局后零位移，路由点原生有效）
+    const { points, rankOf } = dagreWithPadding(this.nodes, aggEdges, { nodesep: 28, edgesep: 10, ranksep: 46 }, depth - 1, this.omit);
+    this.rankOf = rankOf;
+    const chains = EdgeRouter.fromDagre(points, aggEdges, this.idx, rankOf);
 
-    // 与全细节布局对齐（固定参考中心，层级间内容稳定，缩放往返可逆）
-    this.alignToRef();
-
-    // 先套背景盒预留空间，再做连线路由（保证箭头锚在位移后的节点边缘）
-    this.finalizeLayout(depth - 1); // 折叠级：按父模块给拆开的成员套组合背景
-    this.chains = this.routeEdges(aggEdges);
+    // 与全细节布局对齐（固定参考中心，层级间内容稳定，缩放往返可逆）；连线随节点同步平移
+    const delta = this.alignToRef();
+    if (delta) {
+      for (const c of chains) for (const p of c.path) {
+        p.x += delta.x;
+        p.y += delta.y;
+      }
+    }
+    this.chains = chains;
+    this.computePanels(depth - 1); // 折叠级：按父模块给拆开的成员套组合背景
   }
 
   // ---------- 全细节布局（只算一次） ----------
@@ -250,23 +246,14 @@ export class GraphModel {
     this.idx = new Map(this.nodes.map(n => [n.id, n]));
     this.nodes.forEach(nd => sizeNode(nd));
 
-    const g = new dagre.graphlib.Graph();
-    g.setGraph({ rankdir: 'TB', nodesep: 34, edgesep: 10, ranksep: 70, marginx: 0, marginy: 0 });
-    g.setDefaultNodeLabel(() => ({}));
-    g.setDefaultEdgeLabel(() => ({}));
-    this.nodes.forEach(nd => g.setNode(String(nd.id), { width: nd.w!, height: nd.h! }));
-    data.edges.forEach(e => g.setEdge(String(e.src), String(e.dst)));
-    dagre.layout(g);
-
-    this.nodes.forEach(nd => {
-      const pos = g.node(String(nd.id));
-      nd.x = pos.x - nd.w! / 2;
-      nd.y = pos.y - nd.h! / 2;
-    });
+    const maxLayer = Math.max(0, ...data.nodes.filter(n => n.group).map(n => n.group!.split('.').length));
+    const { points, rankOf } = dagreWithPadding(this.nodes, data.edges, { nodesep: 34, edgesep: 10, ranksep: 70 }, maxLayer, this.omit);
+    this.rankOf = rankOf;
     this.fullNodes = this.nodes;
     this.fullIdx = this.idx;
+    this.fullChains = EdgeRouter.fromDagre(points, data.edges, this.idx, rankOf);
 
-    // 缓存全细节布局中心（finalize 之前，永不改变）
+    // 缓存全细节布局中心（永不改变，其他层级对齐到它）
     let fx1 = Infinity,
       fx2 = -Infinity,
       fy1 = Infinity,
@@ -280,9 +267,9 @@ export class GraphModel {
     this.fullRef = isFinite(fx1) ? { x: (fx1 + fx2) / 2, y: (fy1 + fy2) / 2 } : null;
   }
 
-  // 把当前节点整体平移，使包围盒中心对齐 fullRef（跨层级内容稳定）
-  private alignToRef(): void {
-    if (!this.fullRef) return;
+  // 把当前节点整体平移，使包围盒中心对齐 fullRef（跨层级内容稳定）；返回平移量
+  private alignToRef(): Pt | null {
+    if (!this.fullRef) return null;
     let x1 = Infinity,
       x2 = -Infinity,
       y1 = Infinity,
@@ -293,122 +280,15 @@ export class GraphModel {
       y1 = Math.min(y1, nd.y!);
       y2 = Math.max(y2, nd.y! + nd.h!);
     }
-    if (!isFinite(x1)) return;
+    if (!isFinite(x1)) return null;
     const dx = this.fullRef.x - (x1 + x2) / 2;
     const dy = this.fullRef.y - (y1 + y2) / 2;
+    if (dx === 0 && dy === 0) return null;
     this.nodes.forEach(nd => {
       nd.x! += dx;
       nd.y! += dy;
     });
-  }
-
-  // ---------- 布局后处理：为嵌套背景盒预留空间（盒内保持紧凑，只在盒边界处拉开间距） ----------
-
-  private finalizeLayout(maxLayer: number): void {
-    // 1) 排（rank）：dagre 同排节点的中心 y 相同
-    const ys = [...new Set(this.nodes.map(n => Number((n.y!).toFixed(1))))].sort((a, b) => a - b);
-    const rankOf = new Map<number, number>();
-    const ranks = ys.map((y, i) => {
-      const nodes = this.nodes.filter(n => Math.abs(n.y! - y) < 0.05);
-      nodes.forEach(n => rankOf.set(n.id, i));
-      return {
-        idx: i,
-        nodes,
-        top: Math.min(...nodes.map(n => n.y!)),
-        bottom: Math.max(...nodes.map(n => n.y! + n.h!)),
-      };
-    });
-
-    // 2) 背景盒定义，并换算嵌套深度
-    // 省略规则：纯传递前缀不套盒；盒内只有 1 张簇卡片（纯嵌套）也不套盒；含真实算子（哪怕 1 个）则保留
-    interface BoxDef {
-      key: string;
-      segs: number;
-      minRank: number;
-      maxRank: number;
-      inward: number;
-      members: GNode[];
-    }
-    const defs: BoxDef[] = [];
-    {
-      const byKey = new Map<string, { key: string; members: GNode[] }>();
-      for (const nd of this.nodes) {
-        if (!nd.group || nd.kind === 'placeholder' || nd.kind === 'output') continue;
-        const segs = nd.group.split('.').length;
-        for (let layer = 1; layer <= Math.min(maxLayer, segs); layer++) {
-          const key = nd.group.split('.').slice(0, layer).join('.');
-          if (this.omit.has(key)) continue;
-          if (nd.kind === 'module-cluster' && key === nd.group) continue; // 卡片自身不套盒
-          let d = byKey.get(key);
-          if (!d) {
-            d = { key, members: [] };
-            byKey.set(key, d);
-          }
-          d.members.push(nd);
-        }
-      }
-      for (const { key, members } of byKey.values()) {
-        if (members.length === 1 && members[0].kind === 'module-cluster') continue;
-        const rs = members.map(m => rankOf.get(m.id)!);
-        defs.push({ key, segs: key.split('.').length, minRank: Math.min(...rs), maxRank: Math.max(...rs), inward: 0, members });
-      }
-      const maxSegs = Math.max(0, ...defs.map(d => d.segs));
-      defs.forEach(d => (d.inward = maxSegs - d.segs));
-    }
-
-    // 3) 垂直：盒顶部标题条带堆叠 + 盒底部外扩，只加在盒边界相邻的排间距上
-    const topStack = (r: number) =>
-      Math.max(0, ...defs.filter(d => d.minRank === r).map(d => PANEL_PAD + (d.inward + 1) * PANEL_HEADER));
-    const bottomPad = (r: number) => Math.max(0, ...defs.filter(d => d.maxRank === r).map(d => PANEL_PAD + d.inward * 6));
-    for (let r = 0; r + 1 < ranks.length; r++) {
-      const required = topStack(r + 1) + bottomPad(r) + 14;
-      const actual = ranks[r + 1].top - ranks[r].bottom;
-      if (actual < required) {
-        const delta = required - actual;
-        for (let rr = r + 1; rr < ranks.length; rr++) {
-          ranks[rr].top += delta;
-          ranks[rr].bottom += delta;
-          ranks[rr].nodes.forEach(n => (n.y! += delta));
-        }
-      }
-    }
-
-    // 4) 水平：盒左右外扩只加在同排相邻、且分属不同盒的节点之间
-    for (const rank of ranks) {
-      const nodes = rank.nodes.slice().sort((a, b) => a.x! - b.x!);
-      const leftExt = new Map<number, number>();
-      const rightExt = new Map<number, number>();
-      for (const d of defs) {
-        const inRank = d.members.filter(m => rankOf.get(m.id) === rank.idx);
-        if (!inRank.length) continue;
-        const leftmost = inRank.reduce((a, b) => (a.x! < b.x! ? a : b));
-        const rightmost = inRank.reduce((a, b) => (a.x! + a.w! > b.x! + b.w! ? a : b));
-        leftExt.set(leftmost.id, Math.max(leftExt.get(leftmost.id) ?? 0, PANEL_PAD + d.inward * 6));
-        rightExt.set(rightmost.id, Math.max(rightExt.get(rightmost.id) ?? 0, PANEL_PAD + d.inward * 6));
-      }
-      let delta = 0;
-      let prevRight = -Infinity;
-      let prevExt = 0;
-      for (const n of nodes) {
-        const le = leftExt.get(n.id) ?? 0;
-        if (prevRight === -Infinity) {
-          n.x = n.x!;
-        } else {
-          const need = prevRight + prevExt + 18 + le;
-          const x = Math.max(n.x! + delta, need);
-          delta = x - n.x!;
-          n.x = x;
-        }
-        prevRight = n.x! + n.w!;
-        prevExt = rightExt.get(n.id) ?? 0;
-      }
-    }
-
-    // 记录位移后的排带几何，供连线避障路由使用
-    this.bands = ranks.map(r => ({ top: r.top, bottom: r.bottom }));
-    this.rankOf = rankOf;
-
-    this.computePanels(maxLayer); // 最终几何由位移后的成员位置决定
+    return { x: dx, y: dy };
   }
 
   // ---------- 组合背景几何：按模块层级嵌套（外层盒包住内层盒，标题条带逐层错开） ----------
@@ -455,113 +335,6 @@ export class GraphModel {
     }
     // 外层（面积大）先画，内层叠在上面
     this.panels.sort((a, b) => (b.xMax - b.xMin) * (b.yMax - b.yMin) - (a.xMax - a.xMin) * (a.yMax - a.yMin));
-  }
-
-  // ---------- 连线路由：在 finalizeLayout 之后进行，箭头始终锚在节点边缘 ----------
-  // 垂直穿越每排时做避障检查，被节点挡住就在排间空隙里水平绕开；回边自下而上同样处理
-
-  private routeEdges(edges: GEdge[]): Chain[] {
-    const chains: Chain[] = [];
-    if (!this.bands.length) return chains;
-    // 每排的避障矩形（外扩少许，保证线不贴节点）
-    const bandRects = this.bands.map((_, i) =>
-      this.nodes
-        .filter(n => this.rankOf.get(n.id) === i)
-        .map(n => ({ x1: n.x! - 3, x2: n.x! + n.w! + 3, y1: n.y! - 2, y2: n.y! + n.h! + 2 }))
-    );
-    const cx = (n: GNode) => n.x! + n.w! / 2;
-    const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
-
-    for (const e of edges) {
-      const s = this.idx.get(e.src);
-      const t = this.idx.get(e.dst);
-      if (!s || !t) continue;
-      const rs = this.rankOf.get(s.id) ?? 0;
-      const rt = this.rankOf.get(t.id) ?? 0;
-      const path: Pt[] = [];
-      let dashed = false;
-
-      if (rt === rs) {
-        // 同排：水平直连
-        if (cx(t) >= cx(s)) {
-          path.push({ x: s.x! + s.w!, y: s.y! + s.h! / 2 }, { x: t.x!, y: t.y! + t.h! / 2 });
-        } else {
-          path.push({ x: s.x!, y: s.y! + s.h! / 2 }, { x: t.x! + t.w!, y: t.y! + t.h! / 2 });
-        }
-      } else if (Math.abs(rt - rs) === 1) {
-        // 相邻排：Netron 风格平滑 S 曲线（始终落在两排之间的空隙里，不会穿过节点）
-        if (rt > rs) {
-          path.push({ x: cx(s), y: s.y! + s.h! }, { x: cx(t), y: t.y! });
-        } else {
-          dashed = true;
-          path.push({ x: cx(s), y: s.y! }, { x: cx(t), y: t.y! + t.h! });
-        }
-      } else if (rt > rs) {
-        // 跨多排向下：逐排穿越，必要时在排间空隙水平绕行
-        let x = cx(s);
-        path.push({ x, y: s.y! + s.h! });
-        for (let r = rs + 1; r <= rt; r++) {
-          const gapY = (this.bands[r - 1].bottom + this.bands[r].top) / 2;
-          if (r === rt) {
-            const tx = clamp(cx(t), t.x! + 10, t.x! + t.w! - 10);
-            if (Math.abs(tx - x) > 0.5) path.push({ x, y: gapY }, { x: tx, y: gapY });
-            path.push({ x: tx, y: t.y! });
-          } else if (!this.columnClear(x, bandRects[r])) {
-            const nx = this.nearestClearX(x, bandRects[r]);
-            path.push({ x, y: gapY }, { x: nx, y: gapY });
-            x = nx;
-          }
-        }
-      } else {
-        // 跨多排回边（向上）：自下而上，同样的避障策略
-        dashed = true;
-        let x = cx(s);
-        path.push({ x, y: s.y! });
-        for (let r = rs - 1; r >= rt; r--) {
-          const gapY = (this.bands[r].bottom + this.bands[r + 1].top) / 2;
-          if (r === rt) {
-            const tx = clamp(cx(t), t.x! + 10, t.x! + t.w! - 10);
-            if (Math.abs(tx - x) > 0.5) path.push({ x, y: gapY }, { x: tx, y: gapY });
-            path.push({ x: tx, y: t.y! + t.h! });
-          } else if (!this.columnClear(x, bandRects[r])) {
-            const nx = this.nearestClearX(x, bandRects[r]);
-            path.push({ x, y: gapY }, { x: nx, y: gapY });
-            x = nx;
-          }
-        }
-      }
-      chains.push({ src: e.src, dst: e.dst, path, dashed });
-    }
-    return chains;
-  }
-
-  // 垂直穿越第 r 排在 x 处是否无阻挡
-  private columnClear(x: number, rects: { x1: number; x2: number }[]): boolean {
-    return !rects.some(rc => x > rc.x1 && x < rc.x2);
-  }
-
-  // 第 r 排中离 x 最近的可用通道（留在矩形间隙内，距边 6px）
-  private nearestClearX(x: number, rects: { x1: number; x2: number }[]): number {
-    const sorted = rects.slice().sort((a, b) => a.x1 - b.x1);
-    const intervals: [number, number][] = [];
-    let prev = -Infinity;
-    for (const rc of sorted) {
-      if (rc.x1 > prev) intervals.push([prev, rc.x1]);
-      prev = Math.max(prev, rc.x2);
-    }
-    intervals.push([prev, Infinity]);
-    let best = x;
-    let bestD = Infinity;
-    for (const [a, b] of intervals) {
-      if (b - a < 14) continue;
-      const c = Math.min(Math.max(x, a + 7), b - 7);
-      const d = Math.abs(c - x);
-      if (d < bestD) {
-        bestD = d;
-        best = c;
-      }
-    }
-    return best;
   }
 
   // ---------- 选中解析：跨层级传播（模块 ↔ 成员算子） ----------
@@ -657,4 +430,170 @@ export class GraphModel {
     walk(root);
     return root;
   }
+}
+
+// ================= 布局辅助（模块级纯函数） =================
+
+interface DagreOpts {
+  nodesep: number;
+  edgesep: number;
+  ranksep: number;
+}
+
+// 单遍 dagre 布局。inflV/inflH 为每节点的膨胀量（只参与布局计算，不改动真实尺寸），
+// 用于把背景盒所需空间直接烘焙进布局，使布局后无需任何位移。
+function runDagre(
+  nodes: GNode[],
+  edges: GEdge[],
+  opts: DagreOpts,
+  inflV: Map<number, number>,
+  inflH: Map<number, number>
+): { pos: Map<number, Pt>; points: Map<string, Pt[]> } {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'TB', marginx: 0, marginy: 0, ...opts });
+  g.setDefaultNodeLabel(() => ({}));
+  g.setDefaultEdgeLabel(() => ({}));
+  nodes.forEach(nd => {
+    g.setNode(String(nd.id), { width: nd.w! + (inflH.get(nd.id) ?? 0), height: nd.h! + (inflV.get(nd.id) ?? 0) });
+  });
+  edges.forEach(e => g.setEdge(String(e.src), String(e.dst)));
+  dagre.layout(g);
+  const pos = new Map<number, Pt>();
+  nodes.forEach(nd => {
+    const p = g.node(String(nd.id));
+    pos.set(nd.id, { x: p.x, y: p.y });
+  });
+  const points = new Map<string, Pt[]>();
+  edges.forEach(e => {
+    const ge = g.edge(String(e.src), String(e.dst)) as { points?: Pt[] } | undefined;
+    if (ge?.points) points.set(e.src + '>' + e.dst, ge.points.map(p => ({ x: p.x, y: p.y })));
+  });
+  return { pos, points };
+}
+
+// 排（rank）：dagre 同排节点的中心 y 相同
+function computeRanks(nodes: GNode[]): { rankOf: Map<number, number>; ranks: GNode[][] } {
+  const ys = [...new Set(nodes.map(n => Number((n.y!).toFixed(1))))].sort((a, b) => a - b);
+  const rankOf = new Map<number, number>();
+  const ranks = ys.map((y, i) => {
+    const ns = nodes.filter(n => Math.abs(n.y! - y) < 0.05);
+    ns.forEach(n => rankOf.set(n.id, i));
+    return ns;
+  });
+  return { rankOf, ranks };
+}
+
+// 计算背景盒所需填充（垂直按排、水平按节点），换算成 dagre 节点膨胀量。
+// 垂直：rank r 的排带向上下各外扩 max(上方盒头需求, 下方盒底需求)，使相邻排间隙 ≥ 盒头+盒底需求；
+// 水平：节点向左右各外扩其所属盒的左右外扩量，使同排相邻节点间隙 ≥ 两侧外扩之和。
+function computePadding(
+  nodes: GNode[],
+  maxLayer: number,
+  rankOf: Map<number, number>,
+  ranks: GNode[][],
+  omittedKeys: Set<string>
+): { inflV: Map<number, number>; inflH: Map<number, number> } {
+  // 背景盒定义（与 computePanels 同一套规则：省略纯传递前缀、单卡片纯嵌套盒）
+  interface BoxDef {
+    key: string;
+    minRank: number;
+    maxRank: number;
+    inward: number;
+    members: GNode[];
+  }
+  const defs: BoxDef[] = [];
+  {
+    const byKey = new Map<string, { key: string; members: GNode[] }>();
+    for (const nd of nodes) {
+      if (!nd.group || nd.kind === 'placeholder' || nd.kind === 'output') continue;
+      const segs = nd.group.split('.').length;
+      for (let layer = 1; layer <= Math.min(maxLayer, segs); layer++) {
+        const key = nd.group.split('.').slice(0, layer).join('.');
+        if (omittedKeys.has(key)) continue;
+        if (nd.kind === 'module-cluster' && key === nd.group) continue;
+        let d = byKey.get(key);
+        if (!d) {
+          d = { key, members: [] };
+          byKey.set(key, d);
+        }
+        d.members.push(nd);
+      }
+    }
+    for (const { key, members } of byKey.values()) {
+      if (members.length === 1 && members[0].kind === 'module-cluster') continue;
+      const rs = members.map(m => rankOf.get(m.id)!);
+      defs.push({ key, minRank: Math.min(...rs), maxRank: Math.max(...rs), inward: 0, members });
+    }
+    const maxSegs = Math.max(0, ...defs.map(d => d.key.split('.').length));
+    defs.forEach(d => (d.inward = maxSegs - d.key.split('.').length));
+  }
+
+  const inflV = new Map<number, number>();
+  const inflH = new Map<number, number>();
+  if (!defs.length) return { inflV, inflH };
+
+  const topStack = (r: number) =>
+    Math.max(0, ...defs.filter(d => d.minRank === r).map(d => PANEL_PAD + (d.inward + 1) * PANEL_HEADER));
+  const bottomPad = (r: number) => Math.max(0, ...defs.filter(d => d.maxRank === r).map(d => PANEL_PAD + d.inward * 6));
+
+  ranks.forEach((ns, r) => {
+    // 该排上下各外扩 max(上邻排需求的盒头部分, 下邻排需求的盒底部分)，保证相邻排间隙足够
+    const m = Math.max(topStack(r) + 7, bottomPad(r) + 7);
+    if (m > 0) ns.forEach(n => inflV.set(n.id, 2 * m));
+  });
+
+  for (const d of defs) {
+    // 每个盒在其成员所在排的最左/最右成员处外扩
+    const byRank = new Map<number, GNode[]>();
+    for (const m of d.members) {
+      const r = rankOf.get(m.id)!;
+      if (!byRank.has(r)) byRank.set(r, []);
+      byRank.get(r)!.push(m);
+    }
+    for (const inRank of byRank.values()) {
+      const leftmost = inRank.reduce((a, b) => (a.x! < b.x! ? a : b));
+      const rightmost = inRank.reduce((a, b) => (a.x! + a.w! > b.x! + b.w! ? a : b));
+      const ext = PANEL_PAD + d.inward * 6;
+      inflH.set(leftmost.id, Math.max(inflH.get(leftmost.id) ?? 0, 2 * ext));
+      inflH.set(rightmost.id, Math.max(inflH.get(rightmost.id) ?? 0, 2 * ext));
+    }
+  }
+  return { inflV, inflH };
+}
+
+// 两遍（必要时三遍）dagre：第一遍量出填充需求，第二遍用膨胀尺寸重排；
+// 若膨胀改变了排结构则再迭代一次直至收敛。布局后节点零位移，dagre 路由点原生有效。
+function dagreWithPadding(
+  nodes: GNode[],
+  edges: GEdge[],
+  opts: DagreOpts,
+  maxLayer: number,
+  omittedKeys: Set<string>
+): { points: Map<string, Pt[]>; rankOf: Map<number, number> } {
+  let inflV = new Map<number, number>();
+  let inflH = new Map<number, number>();
+  let points = new Map<string, Pt[]>();
+  let rankOf = new Map<number, number>();
+  for (let iter = 0; iter < 3; iter++) {
+    const d = runDagre(nodes, edges, opts, inflV, inflH);
+    for (const nd of nodes) {
+      const c = d.pos.get(nd.id)!;
+      nd.x = c.x - nd.w! / 2;
+      nd.y = c.y - nd.h! / 2;
+    }
+    const rk = computeRanks(nodes);
+    points = d.points;
+    rankOf = rk.rankOf;
+    const pad = computePadding(nodes, maxLayer, rk.rankOf, rk.ranks, omittedKeys);
+    if (sameMap(pad.inflV, inflV) && sameMap(pad.inflH, inflH)) break;
+    inflV = pad.inflV;
+    inflH = pad.inflH;
+  }
+  return { points, rankOf };
+}
+
+function sameMap(a: Map<number, number>, b: Map<number, number>): boolean {
+  const keys = new Set([...a.keys(), ...b.keys()]);
+  for (const k of keys) if ((a.get(k) ?? 0) !== (b.get(k) ?? 0)) return false;
+  return true;
 }

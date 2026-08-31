@@ -59,7 +59,12 @@ body {
 
 /* ---------- 布局 ---------- */
 #main { flex: 1; display: flex; min-height: 0; }
-#tree-panel { width: 250px; overflow: auto; border-right: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); padding: 8px 6px; background: var(--vscode-sideBar-background, transparent); }
+#tree-panel { width: 250px; min-width: 150px; max-width: 70vw; overflow: auto; padding: 8px 6px; background: var(--vscode-sideBar-background, transparent); }
+/* 树面板滚动条：完全隐藏（保留滚轮/拖拽滚动能力） */
+#tree-panel::-webkit-scrollbar { width: 0; height: 0; display: none; }
+#tree-panel { scrollbar-width: none; }
+#tree-splitter { flex: none; width: 5px; cursor: col-resize; background: var(--vscode-panel-border, rgba(128,128,128,.3)); }
+#tree-splitter:hover, #tree-splitter.active { background: var(--vscode-focusBorder, #0078d4); }
 #graph-area { flex: 1; min-width: 0; position: relative; }
 #svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
 #details { width: 300px; overflow: auto; border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); padding: 12px 14px; background: var(--vscode-sideBar-background, transparent); }
@@ -67,12 +72,12 @@ body {
 /* ---------- 模块树面板 ---------- */
 .panel-title { font-weight: 600; opacity: .65; margin: 2px 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
 .tree-item details { margin-left: 12px; }
-.tree-item > details > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; padding: 3px 6px; border-radius: 4px; }
+.tree-item > details > summary { list-style: none; cursor: pointer; display: flex; justify-content: flex-start; gap: 8px; padding: 3px 6px; border-radius: 4px; }
 .tree-item > details > summary::before { content: '▾ '; opacity: .5; }
 .tree-item > details:not([open]) > summary::before { content: '▸ '; }
 .tree-leaf { display: flex; justify-content: space-between; gap: 8px; padding: 3px 6px 3px 24px; border-radius: 4px; cursor: pointer; }
 .t-name { font-family: Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.t-sub { opacity: .5; font-size: 11px; font-family: Consolas, monospace; white-space: nowrap; }
+.t-sub { opacity: .5; font-size: 11px; font-family: Consolas, monospace; white-space: nowrap; margin-left: auto; }
 #tree-panel [data-qname]:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }
 #tree-panel [data-qname].hl { background: rgba(245,166,35,.22); outline: 1px solid rgba(245,166,35,.55); }
 
@@ -88,8 +93,8 @@ body {
 #panels.dimmed .panel-box, #panels.dimmed .panel-name, #panels.dimmed .panel-sub { opacity: .25; }
 
 /* ---------- 图形：节点 ---------- */
-.edge { stroke: #98a2ac; stroke-width: 1; fill: none; stroke-opacity: .75; marker-end: url(#arrow); transition: stroke-opacity .15s; }
-.edge.back { stroke-dasharray: 4 4; stroke: #b58a8a; }
+.edge { stroke: #c9d6e2; stroke-width: 1; fill: none; stroke-opacity: .9; marker-end: url(#arrow); transition: stroke-opacity .15s; }
+.edge.back { stroke-dasharray: 4 4; stroke: #e0a8a8; }
 .edge.dim { stroke-opacity: .06; }
 .edge.hl { stroke: #f5a623; stroke-width: 1.8; stroke-opacity: 1; marker-end: url(#arrow-hl); }
 .vdot { fill: #8a939e; fill-opacity: .45; }
@@ -115,7 +120,10 @@ body {
 .divider { stroke: rgba(127,127,127,.35); stroke-width: 1; pointer-events: none; }
 
 .io-pill { }
+.io-inner { pointer-events: none; }
 .io-text { user-select: none; pointer-events: none; }
+.node:hover .io-pill { stroke-opacity: .95; }
+.node.sel .io-pill, .node.hit .io-pill { stroke-width: 2; }
 
 /* ---------- 图例 ---------- */
 #legend {

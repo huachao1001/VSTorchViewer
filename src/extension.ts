@@ -302,10 +302,11 @@ function openViewer(context: vscode.ExtensionContext, payload: any, fileName: st
 </div>
 <div id="main">
   <div id="tree-panel"></div>
+  <div id="tree-splitter" title="拖拽调整宽度"></div>
   <div id="graph-area">
     <svg id="svg">
       <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#98a2ac"></path></marker>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#c9d6e2"></path></marker>
         <marker id="arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#f5a623"></path></marker>
       </defs>
       <g id="viewport"><g id="panels"></g><g id="nodes"></g><g id="edges"></g></g>

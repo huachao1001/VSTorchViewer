@@ -16,7 +16,8 @@ export function sizeNode(nd: GNode): void {
   if (isIO(nd)) {
     const head = nd.kind === 'placeholder' ? '输入 · ' : '输出 · ';
     const shp = shapeStr(nd);
-    const w = Math.max(textW(head + (nd.name || ''), FONT_NAME), shp ? textW(shp, FONT_SHAPE) : 0);
+    const label = head + '「' + (nd.name || '') + '」';
+    const w = Math.max(textW(label, FONT_NAME), shp ? textW(shp, FONT_SHAPE) : 0);
     nd.w = clamp(w + 34, 110, 240);
     nd.h = 38;
     return;

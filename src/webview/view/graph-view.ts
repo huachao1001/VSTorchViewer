@@ -1,7 +1,7 @@
 // GraphView：视图控制器
 // 职责：视图变换（缩放/平移/适应）、渲染循环、交互事件、选中高亮、搜索
 // 数据与布局全部委托给 GraphModel；SVG 构建委托给各 Renderer
-import type { GNode, GraphData, Selection } from '../types';
+import type { GNode, GraphData, Pt, Selection } from '../types';
 import { clamp, FONT_NAME } from '../utils';
 import { K_MIN, GraphModel } from '../graph-model';
 import { NodeRenderer } from '../render/node-renderer';
@@ -34,6 +34,8 @@ export class GraphView {
   private fitting = false;
   // 缩放动画状态：目标缩放 + 锚点，rAF 指数趋近（地图式连续缩放）
   private zoomAnim: { target: number; ax: number; ay: number; last: number; raf: number } | null = null;
+  // 跨级比例映射记忆：展开时记录（卡片 bbox ↔ 成员区域 bbox），收拢时用于精确逆映射
+  private maps: { from: number; to: number; Bc: Rect; Bf: Rect }[] = [];
 
   constructor(
     private model: GraphModel,
@@ -75,7 +77,14 @@ export class GraphView {
 
   private renderEdges(): void {
     this.c.edgesG.innerHTML = '';
-    for (const ch of this.model.chains) this.c.edgesG.appendChild(this.edgeRenderer.build(ch, this.model.idx));
+    const seen = new Set<string>();
+    for (const ch of this.model.chains) {
+      // 两节点之间只绘制一条连线（不区分方向）
+      const key = ch.src < ch.dst ? `${ch.src}:${ch.dst}` : `${ch.dst}:${ch.src}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      this.c.edgesG.appendChild(this.edgeRenderer.build(ch, this.model.idx));
+    }
   }
 
   // 符号追踪失败的回退：模块树视图
@@ -172,52 +181,10 @@ export class GraphView {
   // ---------- 视图变换 ----------
 
   private apply(): void {
-    // 视图钳制：无论怎么缩放/平移，图的包围盒至少留 80px 在视口内，整图不会逃出可视范围
-    const W = this.c.svg.clientWidth;
-    const H = this.c.svg.clientHeight;
-    if (W > 60 && H > 60) {
-      const b = this.contentBounds();
-      if (b) {
-        // 弱钳制：仅在内容即将完全滑出视口时拉回（≥80px 交叠）。
-        // 正常缩放区间不介入，保证缩放往返精确可逆（每步都是纯锚点变换）。
-        const m = 80;
-        const k = this.view.k;
-        const x1 = this.view.tx + b.minX * k;
-        const x2 = this.view.tx + b.maxX * k;
-        const y1 = this.view.ty + b.minY * k;
-        const y2 = this.view.ty + b.maxY * k;
-        if (x2 < m) this.view.tx += m - x2;
-        if (x1 > W - m) this.view.tx -= x1 - (W - m);
-        if (y2 < m) this.view.ty += m - y2;
-        if (y1 > H - m) this.view.ty -= y1 - (H - m);
-      }
-    }
     this.c.viewport.setAttribute(
       'transform',
       `translate(${this.view.tx.toFixed(1)} ${this.view.ty.toFixed(1)}) scale(${this.view.k.toFixed(4)})`
     );
-  }
-
-  // 当前内容的包围盒（节点 + 背景盒，世界坐标）
-  private contentBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
-    for (const nd of this.model.nodes) {
-      if (nd.x === undefined) continue;
-      minX = Math.min(minX, nd.x);
-      maxX = Math.max(maxX, nd.x + (nd.w || 0));
-      minY = Math.min(minY, nd.y!);
-      maxY = Math.max(maxY, nd.y! + (nd.h || 0));
-    }
-    for (const p of this.model.panels) {
-      minX = Math.min(minX, p.x!);
-      maxX = Math.max(maxX, p.x! + p.w!);
-      minY = Math.min(minY, p.yTop!);
-      maxY = Math.max(maxY, p.yTop! + p.yH!);
-    }
-    return isFinite(minX) ? { minX, maxX, minY, maxY } : null;
   }
 
   private zoomAt(mx: number, my: number, factor: number): void {
@@ -258,7 +225,7 @@ export class GraphView {
     this.view.ty = ay - (ay - this.view.ty) * r;
     this.view.k = k;
     this.apply();
-    this.syncLevel();
+    this.syncLevel(ax, ay);
   }
 
   // 测试钩子：立即完成进行中的缩放动画
@@ -311,20 +278,142 @@ export class GraphView {
     if (!this.fitting) {
       this.fitting = true;
       const before = this.model.level;
-      this.syncLevel();
+      this.syncLevel(this.c.svg.clientWidth / 2, this.c.svg.clientHeight / 2);
       if (this.model.level !== before) this.fit();
       this.fitting = false;
     }
   }
 
   // 缩放跨过阈值 → 切换层级：旧场景直接消失，新场景直接显示
-  // 场景切换不改视图变换（缩放往返保持精确可逆）
-  private syncLevel(): void {
+  // 跨级比例映射：展开时记录（粗层级卡片 bbox ↔ 细层级成员区域 bbox），
+  // 鼠标在卡片内的相对位置映射到成员区域的同一相对位置（鼠标下的子节点确定）；
+  // 收拢时若鼠标仍在记录区域内，用同一对 bbox 做逆映射——静态鼠标下往返精确可逆。
+  // 鼠标不在节点上但在组合区域内时，用组合窗口矩形 ↔ 收拢卡片 bbox 做同样的比例锁定
+  private syncLevel(ax: number, ay: number): void {
     const target = this.model.zoomToLevel(this.view.k);
     if (target === this.model.level) return;
-    this.model.setLevel(target);
-    this.renderGraph();
+    const zoomIn = target > this.model.level;
+    // 纯锚点缩放下鼠标世界点不变
+    const w: Pt = { x: (ax - this.view.tx) / this.view.k, y: (ay - this.view.ty) / this.view.k };
+    const prevLevel = this.model.level;
+
+    if (zoomIn) {
+      const coarseNodes = this.model.nodes.slice();
+      const hit = this.nodeIn(coarseNodes, w);
+      const isCluster = !!hit && hit.kind === 'module-cluster' && !!hit.clusterKey;
+      // 参考窗口优先级：簇卡片 / 普通节点（IO 跨层级同 id）/ 最小包含组合区域
+      const panel = hit ? null : this.smallestPanelAt(w);
+      const Bc = hit ? nodeRect(hit) : panel?.rect ?? null;
+      this.model.setLevel(target);
+      this.renderGraph();
+      const K = isCluster ? hit!.clusterKey! : panel?.key;
+      const Bf = isCluster
+        ? bboxOf(
+            this.model.nodes.filter(
+              nd =>
+                nd.clusterKey === K ||
+                (nd.clusterKey && nd.clusterKey.startsWith(K! + '.')) ||
+                (nd.group && (nd.group === K || nd.group.startsWith(K! + '.')))
+            )
+          )
+        : hit
+          ? nodeRect(this.model.idx.get(hit.id))
+          : panel
+            ? bboxOf(this.model.nodes.filter(nd => nd.group && (nd.group === panel.key || nd.group.startsWith(panel.key + '.'))))
+            : null;
+      if (Bc && Bf && Bc.x2 - Bc.x1 >= 1 && Bc.y2 - Bc.y1 >= 1) {
+        this.applyAnchor(ax, ay, mapRel(w, Bc, Bf));
+        // 记录本次跨级映射（供收拢时逆映射）；同层级对去重即可——各层级几何确定，记录不会失效
+        this.maps = this.maps.filter(m => !(m.from === prevLevel && m.to === target));
+        this.maps.push({ from: prevLevel, to: target, Bc, Bf });
+        if (this.maps.length > 16) this.maps.shift();
+      }
+    } else {
+      const fineNodes = this.model.nodes.slice();
+      const hit = this.nodeIn(fineNodes, w);
+      // 细层级组合区域需在 setLevel 前捕获（renderGraph 后 panels 已是粗层级）
+      const panel = hit ? null : this.smallestPanelAt(w);
+      const ei = this.maps.findIndex(m => m.from === target && m.to === prevLevel && inRect(w, m.Bf));
+      this.model.setLevel(target);
+      this.renderGraph();
+      if (ei >= 0) {
+        const m = this.maps[ei];
+        this.maps.splice(ei, 1);
+        this.applyAnchor(ax, ay, mapRel(w, m.Bf, m.Bc));
+      } else if (hit) {
+        const isCluster = hit.kind === 'module-cluster' && !!hit.clusterKey;
+        const Bf = nodeRect(hit);
+        // 收拢目标：IO 节点跨层级同 id；普通算子 → 其所属簇卡片（clusterKey 为 group 的最长前缀）
+        const Bc = isCluster
+          ? bboxOf(
+              this.model.nodes.filter(nd => nd.clusterKey && (nd.clusterKey === hit!.clusterKey || nd.clusterKey.startsWith(hit!.clusterKey! + '.')))
+            )
+          : nodeRect(this.model.idx.get(hit.id) ?? this.cardOf(hit));
+        if (Bc && Bf && Bc.x2 - Bc.x1 >= 1 && Bc.y2 - Bc.y1 >= 1) {
+          this.applyAnchor(ax, ay, mapRel(w, Bf, Bc));
+        }
+      } else if (panel) {
+        const K = panel.key;
+        const Bc = bboxOf(
+          this.model.nodes.filter(nd => nd.clusterKey && (nd.clusterKey === K || nd.clusterKey.startsWith(K + '.')))
+        );
+        if (Bc && Bc.x2 - Bc.x1 >= 1 && Bc.y2 - Bc.y1 >= 1) {
+          this.applyAnchor(ax, ay, mapRel(w, panel.rect, Bc));
+        }
+      }
+    }
     this.applySelection();
+  }
+
+  // 包含世界点 w 的最小组合区域（背景矩形）；无则返回 null
+  private smallestPanelAt(w: Pt): { key: string; rect: Rect } | null {
+    let best: { key: string; rect: Rect } | null = null;
+    let bestA = Infinity;
+    for (const p of this.model.panels) {
+      if (p.x === undefined) continue;
+      const r: Rect = { x1: p.x, x2: p.x + p.w!, y1: p.yTop!, y2: p.yTop! + p.yH! };
+      if (!inRect(w, r)) continue;
+      const a = (r.x2 - r.x1) * (r.y2 - r.y1);
+      if (a < bestA) {
+        bestA = a;
+        best = { key: p.key, rect: r };
+      }
+    }
+    return best;
+  }
+
+  // 细层级节点收拢后所属的簇卡片（clusterKey 为 group 的最长前缀匹配）
+  private cardOf(nd: GNode): GNode | undefined {
+    if (!nd.group) return undefined;
+    let best: GNode | undefined;
+    let bestLen = -1;
+    for (const c of this.model.nodes) {
+      if (!c.clusterKey) continue;
+      if (nd.group === c.clusterKey || nd.group.startsWith(c.clusterKey + '.')) {
+        if (c.clusterKey.length > bestLen) {
+          bestLen = c.clusterKey.length;
+          best = c;
+        }
+      }
+    }
+    return best;
+  }
+
+  // 把视图平移到使世界点 w2 位于缩放锚点 (ax, ay) 下
+  private applyAnchor(ax: number, ay: number, w2: Pt): void {
+    this.view.tx = ax - this.view.k * w2.x;
+    this.view.ty = ay - this.view.k * w2.y;
+    this.apply();
+  }
+
+  // 节点列表中的最上层命中
+  private nodeIn(nodes: GNode[], w: Pt): GNode | null {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const nd = nodes[i];
+      if (nd.x === undefined) continue;
+      if (w.x >= nd.x && w.x <= nd.x + (nd.w || 0) && w.y >= nd.y! && w.y <= nd.y! + (nd.h || 0)) return nd;
+    }
+    return null;
   }
 
   // ---------- 搜索 ----------
@@ -362,7 +451,16 @@ export class GraphView {
       e => {
         e.preventDefault();
         const r = svg.getBoundingClientRect();
-        this.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.pow(1.0015, -e.deltaY));
+        const mx = e.clientX - r.left;
+        const my = e.clientY - r.top;
+        const w: Pt = { x: (mx - this.view.tx) / this.view.k, y: (my - this.view.ty) / this.view.k };
+        // 仅在节点或组合区域（背景矩形）上响应缩放；空白处滚轮改为上下滚动
+        if (this.nodeIn(this.model.nodes, w) || this.smallestPanelAt(w)) {
+          this.zoomAt(mx, my, Math.pow(1.0015, -e.deltaY));
+        } else {
+          this.view.ty -= e.deltaY;
+          this.apply();
+        }
       },
       { passive: false }
     );
@@ -431,4 +529,39 @@ function fmtShapeText(s?: number[]): string {
 
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// 节点集合的世界包围盒；空集合返回 null
+function bboxOf(nodes: GNode[]): { x1: number; x2: number; y1: number; y2: number } | null {
+  let x1 = Infinity,
+    x2 = -Infinity,
+    y1 = Infinity,
+    y2 = -Infinity;
+  for (const nd of nodes) {
+    if (nd.x === undefined) continue;
+    x1 = Math.min(x1, nd.x);
+    x2 = Math.max(x2, nd.x + (nd.w || 0));
+    y1 = Math.min(y1, nd.y!);
+    y2 = Math.max(y2, nd.y! + (nd.h || 0));
+  }
+  return isFinite(x1) ? { x1, x2, y1, y2 } : null;
+}
+
+type Rect = { x1: number; x2: number; y1: number; y2: number };
+
+// 单个节点的世界矩形；坐标缺失返回 null
+function nodeRect(nd?: GNode): Rect | null {
+  if (!nd || nd.x === undefined) return null;
+  return { x1: nd.x, x2: nd.x + (nd.w || 0), y1: nd.y!, y2: nd.y! + (nd.h || 0) };
+}
+
+function inRect(w: Pt, r: Rect): boolean {
+  return w.x >= r.x1 && w.x <= r.x2 && w.y >= r.y1 && w.y <= r.y2;
+}
+
+// 相对位置映射：w 在 from 内的相对位置 → to 内同一相对位置（钳制到边界内）
+function mapRel(w: Pt, from: Rect, to: Rect): Pt {
+  const rx = clamp((w.x - from.x1) / (from.x2 - from.x1), 0, 1);
+  const ry = clamp((w.y - from.y1) / (from.y2 - from.y1), 0, 1);
+  return { x: to.x1 + rx * (to.x2 - to.x1), y: to.y1 + ry * (to.y2 - to.y1) };
 }

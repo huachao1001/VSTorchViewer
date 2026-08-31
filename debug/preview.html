@@ -33,10 +33,11 @@
 </div>
 <div id="main">
   <div id="tree-panel"></div>
+  <div id="tree-splitter" title="拖拽调整宽度"></div>
   <div id="graph-area">
     <svg id="svg">
       <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#8f8f8f"></path></marker>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#c9d6e2"></path></marker>
         <marker id="arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#f5a623"></path></marker>
       </defs>
       <g id="viewport"><g id="panels"></g><g id="nodes"></g><g id="edges"></g></g>
@@ -46,8 +47,15 @@
 </div>
 <pre id="err-banner" style="display:none;position:fixed;left:0;right:0;bottom:0;max-height:40%;overflow:auto;z-index:99;margin:0;padding:8px 12px;background:#5c1a1a;color:#ffd7d7;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;"></pre>
 <script>
-  // 桩：与 VS Code webview 提供的 API 保持一致
-  window.acquireVsCodeApi = () => ({ postMessage() {}, getState() { return {}; }, setState() {} });
+  // 桩：与 VS Code webview 提供的 API 保持一致（状态用 localStorage 持久化，刷新不丢）
+  window.acquireVsCodeApi = () => {
+    const KEY = '__tv_webview_state__';
+    return {
+      postMessage() {},
+      getState() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } },
+      setState(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} },
+    };
+  };
 
   // 页面内错误横幅：任何异常直接显示在页面上，便于截图/复制反馈
   const banner = document.getElementById('err-banner');
