@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TorchViewer 调试预览</title>
+<link rel="stylesheet" href="/media/main.css">
+<style>
+  /* 独立浏览器无 VS Code 变量注入，这里按深色主题兜底 */
+  :root {
+    --vscode-editor-background: #1f1f1f;
+    --vscode-editor-foreground: #cccccc;
+    --vscode-sideBar-background: #181818;
+    --vscode-input-background: #2a2a2a;
+    --vscode-input-foreground: #cccccc;
+    --vscode-input-border: rgba(128,128,128,.35);
+    --vscode-panel-border: rgba(128,128,128,.3);
+    --vscode-editorWidget-background: #252526;
+    --vscode-list-hoverBackground: rgba(128,128,128,.15);
+    --vscode-descriptionForeground: #9d9d9d;
+    --vscode-focusBorder: #0078d4;
+  }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button id="btn-zoom-in" title="放大">＋</button>
+  <button id="btn-zoom-out" title="缩小">－</button>
+  <button id="btn-fit" title="适应视图">⤢</button>
+  <div id="search-wrap"><input id="search" placeholder="搜索节点…" /><div id="search-list"></div></div>
+  <span id="model-name"></span>
+  <span style="margin-left:8px;font-size:11px;opacity:.5">调试预览 · 文件变更自动刷新</span>
+</div>
+<div id="main">
+  <div id="tree-panel"></div>
+  <div id="graph-area">
+    <svg id="svg">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#8f8f8f"></path></marker>
+        <marker id="arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#f5a623"></path></marker>
+      </defs>
+      <g id="viewport"><g id="panels"></g><g id="nodes"></g><g id="edges"></g></g>
+    </svg>
+  </div>
+  <div id="details"></div>
+</div>
+<pre id="err-banner" style="display:none;position:fixed;left:0;right:0;bottom:0;max-height:40%;overflow:auto;z-index:99;margin:0;padding:8px 12px;background:#5c1a1a;color:#ffd7d7;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;"></pre>
+<script>
+  // 桩：与 VS Code webview 提供的 API 保持一致
+  window.acquireVsCodeApi = () => ({ postMessage() {}, getState() { return {}; }, setState() {} });
+
+  // 页面内错误横幅：任何异常直接显示在页面上，便于截图/复制反馈
+  const banner = document.getElementById('err-banner');
+  function showErr(msg) {
+    banner.style.display = 'block';
+    banner.textContent += msg + '\n\n';
+  }
+  window.addEventListener('error', e => showErr('[JS] ' + (e.message || '') + (e.error && e.error.stack ? '\n' + e.error.stack : '')));
+  window.addEventListener('unhandledrejection', e => showErr('[Promise] ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+
+  function getJSON(url, cb, errCb) {
+    const x = new XMLHttpRequest();
+    x.open('GET', url, true);
+    x.onload = () => {
+      try { cb(JSON.parse(x.responseText)); }
+      catch (e) { (errCb || showErr)('JSON 解析失败 ' + url + ': ' + e.message); }
+    };
+    x.onerror = () => (errCb || showErr)('请求失败 ' + url + ' (status ' + x.status + ')');
+    x.send();
+  }
+
+  // 加载渲染器与数据
+  getJSON('/graph.json?t=' + Date.now(), data => {
+    const s = document.createElement('script');
+    s.src = '/media/main.js?t=' + Date.now();
+    s.onload = () => window.dispatchEvent(new MessageEvent('message', { data: { type: 'data', data } }));
+    s.onerror = () => showErr('main.js 加载失败');
+    document.body.appendChild(s);
+  }, msg => {
+    showErr(
+      msg +
+      '\n\n提示：上面这种"已禁止/不在受信任的文件夹"错误来自 VS Code 受限模式（Simple Browser 会拦截请求）。' +
+      '\n解决办法任选其一：\n' +
+      '  1) Ctrl+Shift+P → Manage Workspace Trust → 信任当前文件夹\n' +
+      '  2) 改用系统浏览器打开 http://localhost:8123（调试服务启动时已自动打开）'
+    );
+  });
+
+  // 轮询文件 mtime，任一变更即整页刷新
+  let last = null;
+  setInterval(() => {
+    getJSON('/__mtime?t=' + Date.now(), m => {
+      if (last && (m.js !== last.js || m.css !== last.css || m.html !== last.html || m.graph !== last.graph)) {
+        location.reload();
+        return;
+      }
+      last = m;
+    }, () => {});
+  }, 800);
+</script>
+</body>
+</html>
