@@ -1,4 +1,4 @@
-// TreePanel：左侧模块结构树（数据来自导出格式中的 tree 字段）
+// TreePanel：左侧模块结构树（数据来自导出格式中的 tree 字段，图内算子按 group 补挂）
 import type { GNode, GraphData } from '../types';
 import { esc, fmtNum, fmtShape } from '../utils';
 
@@ -10,6 +10,11 @@ function countTreeParams(nd: GNode): number {
 }
 
 export class TreePanel {
+  // group 路径 → 该模块下的自由算子（call_function/call_method，如 cat、pad）及其图内执行序
+  private ops = new Map<string, { nd: GNode; idx: number }[]>();
+  // 路径 → 图执行序中首次出现位置（子模块/算子按数据流排序）
+  private flow = new Map<string, number>();
+
   constructor(
     private container: HTMLElement,
     private locate: (qname: string, isModule: boolean) => void
@@ -21,6 +26,29 @@ export class TreePanel {
       this.container.style.display = 'none';
       return;
     }
+    this.ops = new Map();
+    this.flow = new Map();
+    const touch = (path: string, i: number): void => {
+      const cur = this.flow.get(path);
+      if (cur === undefined || i < cur) this.flow.set(path, i);
+    };
+    data.nodes.forEach((nd, i) => {
+      if (nd.kind === 'placeholder' || nd.kind === 'output') return;
+      if (nd.kind === 'call_function' || nd.kind === 'call_method') {
+        const g = nd.group || '';
+        let arr = this.ops.get(g);
+        if (!arr) this.ops.set(g, (arr = []));
+        arr.push({ nd, idx: i });
+      }
+      // group 与 call_module/get_attr 的 target 的各级前缀都记为首次触达
+      const paths: string[] = [];
+      if (nd.group) paths.push(nd.group);
+      if ((nd.kind === 'call_module' || nd.kind === 'get_attr') && nd.target) paths.push(nd.target);
+      for (const p of paths) {
+        const segs = p.split('.');
+        for (let k = 1; k <= segs.length; k++) touch(segs.slice(0, k).join('.'), i);
+      }
+    });
     this.container.style.display = '';
     this.container.innerHTML = '<div class="panel-title">模块结构</div>';
     // 根节点路径置空：子级 qname 从根的直接子模块开始，与图内 group/target 路径对齐
@@ -28,8 +56,8 @@ export class TreePanel {
   }
 
   syncHighlight(nd: GNode | null): void {
-    // 簇卡片用 clusterKey；模块调用用 target；普通算子无对应树节点
-    const q = nd ? nd.clusterKey || (nd.kind === 'call_module' ? nd.target || nd.name : null) : null;
+    // 簇卡片用 clusterKey；模块调用用 target；普通算子用 fx 节点名
+    const q = nd ? nd.clusterKey || (nd.kind === 'call_module' ? nd.target || nd.name : nd.name) : null;
     let hitRow: HTMLElement | null = null;
     for (const e of Array.from(this.container.querySelectorAll<HTMLElement>('[data-qname]'))) {
       const hit = q !== null && e.dataset.qname === q;
@@ -52,7 +80,8 @@ export class TreePanel {
     const div = document.createElement('div');
     div.className = 'tree-item';
     const kids = nd.children || [];
-    const hasMod = kids.some(k => k.children !== undefined);
+    const ops = this.ops.get(qname) || [];
+    const hasMod = kids.some(k => k.children !== undefined) || ops.length > 0;
     if (hasMod) {
       const det = document.createElement('details');
       det.open = (prefix.match(/\./g) || []).length < 2;
@@ -74,7 +103,16 @@ export class TreePanel {
         this.locate(qname, true);
       });
       det.appendChild(sum);
-      kids.forEach(k => det.appendChild(this.item(k, qname)));
+      // 参数/缓冲保持在前；子模块与算子按图执行序（数据流）交错排列
+      kids.filter(k => k.children === undefined).forEach(k => det.appendChild(this.item(k, qname)));
+      const entries = [
+        ...kids
+          .filter(k => k.children !== undefined)
+          .map(m => ({ mod: m as GNode, op: null as { nd: GNode; idx: number } | null, i: this.flow.get(qname ? `${qname}.${m.name}` : m.name) ?? Infinity })),
+        ...ops.map(o => ({ mod: null as GNode | null, op: o as { nd: GNode; idx: number } | null, i: o.idx })),
+      ];
+      entries.sort((a, b) => a.i - b.i);
+      for (const e of entries) det.appendChild(e.op ? this.opRow(e.op.nd) : this.item(e.mod!, qname));
       div.appendChild(det);
     } else {
       const row = document.createElement('div');
@@ -86,5 +124,16 @@ export class TreePanel {
       div.appendChild(row);
     }
     return div;
+  }
+
+  // 自由算子叶子：点击定位到全细节层的对应节点
+  private opRow(nd: GNode): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'tree-leaf';
+    row.dataset.qname = nd.name;
+    const info = nd.out_shape ? ' ' + fmtShape(nd.out_shape) : '';
+    row.innerHTML = `<span class="t-name">${esc(nd.cls || nd.name || '')}</span><span class="t-sub">${esc(info)}</span>`;
+    row.addEventListener('click', () => this.locate(nd.name, false));
+    return row;
   }
 }

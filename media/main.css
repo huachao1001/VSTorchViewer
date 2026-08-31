@@ -85,15 +85,16 @@ details[open] > summary > .t-caret::before { content: '▾'; }
 
 /* ---------- 图形：面板 ---------- */
 .panel-box {
-  /* 与组合卡片头部同色系（#6e5a8e）的紫色透明 */
-  fill: rgba(110,90,142,.10);
-  stroke: rgba(110,90,142,.35);
+  /* 与组合卡片头部同色系（#6e5a8e）的紫色透明（提亮） */
+  fill: rgba(158,132,208,.20);
+  stroke: rgba(168,140,224,.55);
   stroke-width: 1;
   transition: opacity .15s;
 }
 .panel-name { fill: var(--vscode-editor-foreground, #cccccc); opacity: .8; }
 .panel-sub { fill: var(--vscode-editor-foreground, #cccccc); opacity: .4; }
-#panels.dimmed .panel-box, #panels.dimmed .panel-name, #panels.dimmed .panel-sub { opacity: .25; }
+.panel-box.dim { opacity: .25; }
+.panel-name.dim, .panel-sub.dim { opacity: .15; }
 
 /* ---------- 图形：节点 ---------- */
 .edge { stroke: #c9d6e2; stroke-width: 1; fill: none; stroke-opacity: .9; marker-end: url(#arrow); transition: stroke-opacity .15s; }

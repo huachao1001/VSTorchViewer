@@ -1,7 +1,7 @@
 // GraphView：视图控制器
 // 职责：视图变换（缩放/平移/适应）、渲染循环、交互事件、选中高亮、搜索
 // 数据与布局全部委托给 GraphModel；SVG 构建委托给各 Renderer
-import type { GNode, GraphData, Pt, Selection } from '../types';
+import type { GNode, GraphData, Panel, Pt, Selection } from '../types';
 import { clamp, FONT_NAME } from '../utils';
 import { K_MIN, GraphModel } from '../graph-model';
 import { NodeRenderer } from '../render/node-renderer';
@@ -153,21 +153,50 @@ export class GraphView {
 
   private applySelection(): void {
     const { ids, primary } = this.model.resolveSelection(this.sel);
+    // 选中节点在当前层级解析不到（如未分组算子被折叠进卡片）→ 不置灰全图，避免缩放时"整图消失"
+    const dim = !!this.sel && ids.size > 0;
     this.c.nodesG.querySelectorAll('.node').forEach(g => {
       const nid = Number((g as SVGGElement).dataset.id);
       g.classList.toggle('sel', ids.has(nid));
-      g.classList.toggle('dim', !!this.sel && !ids.has(nid));
+      g.classList.toggle('dim', dim && !ids.has(nid));
     });
-    this.c.panelsG.classList.toggle('dimmed', !!this.sel);
+    // 组合背景块联动：选中的面板保持自带紫色（仅从置灰恢复），其余继续置灰
+    const hlKeys = this.highlightedPanelKeys(ids, primary);
+    this.c.panelsG.querySelectorAll('[data-key]').forEach(el => {
+      const k = (el as SVGElement).dataset.key!;
+      el.classList.toggle('dim', dim && !hlKeys.has(k));
+    });
     this.c.edgesG.querySelectorAll('.edge').forEach(p => {
       const src = Number((p as SVGPathElement).dataset.src);
       const dst = Number((p as SVGPathElement).dataset.dst);
       const hl = ids.has(src) || ids.has(dst);
       p.classList.toggle('hl', hl);
-      p.classList.toggle('dim', !!this.sel && !hl);
+      p.classList.toggle('dim', dim && !hl);
     });
     this.details.show(primary, this.model.data);
     this.tree.syncHighlight(primary);
+  }
+
+  // 选中态对应的组合背景块 key 集合
+  private highlightedPanelKeys(ids: Set<number>, primary: GNode | null): Set<string> {
+    const keys = new Set<string>();
+    if (this.sel?.isCluster && this.sel.group) {
+      keys.add(this.sel.group);
+      return keys;
+    }
+    if (!primary) return keys;
+    let best: Panel | null = null;
+    let bestA = Infinity;
+    for (const p of this.model.panels) {
+      if (!p.nodes.some(n => ids.has(n.id))) continue;
+      const a = p.w! * p.yH!;
+      if (a < bestA) {
+        bestA = a;
+        best = p;
+      }
+    }
+    if (best) keys.add(best.key);
+    return keys;
   }
 
   // 树 → 图联动：自动切换到能显示目标节点的层级（展开/折叠），选中并居中
@@ -282,6 +311,28 @@ export class GraphView {
     cancelAnimationFrame(z.raf);
     this.zoomAnim = null;
     this.setK(z.target, z.ax, z.ay);
+  }
+
+  // 竖向滚动的平移钳制：内容装得下视口时整体保持在窗口内，装不下时至少保留可见
+  private clampTy(ty: number): number {
+    const nodes = this.model.nodes;
+    if (!nodes.length) return ty;
+    let minY = Infinity,
+      maxY = -Infinity;
+    for (const nd of nodes) {
+      if (nd.x === undefined) continue;
+      minY = Math.min(minY, nd.y!);
+      maxY = Math.max(maxY, nd.y! + (nd.h || 0));
+    }
+    for (const p of this.model.panels) {
+      minY = Math.min(minY, p.yTop!);
+      maxY = Math.max(maxY, p.yTop! + p.yH!);
+    }
+    if (!isFinite(minY)) return ty;
+    const k = this.view.k;
+    const H = this.c.svg.clientHeight;
+    if (k * (maxY - minY) <= H) return clamp(ty, -k * minY, H - k * maxY);
+    return clamp(ty, -k * maxY, H - k * minY);
   }
 
   private centerOn(id: number): void {
@@ -505,7 +556,7 @@ export class GraphView {
         if (this.nodeIn(this.model.nodes, w) || this.smallestPanelAt(w)) {
           this.zoomAt(mx, my, Math.pow(1.0015, -e.deltaY));
         } else {
-          this.view.ty -= e.deltaY;
+          this.view.ty = this.clampTy(this.view.ty - e.deltaY);
           this.apply();
         }
       },

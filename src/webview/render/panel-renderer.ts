@@ -18,11 +18,12 @@ export class PanelRenderer {
       height: p.yH!.toFixed(1),
       rx: 10,
       class: 'panel-box',
+      'data-key': p.key,
     });
   }
 
   private label(p: Panel): SVGGElement {
-    const g = el('g', { class: 'panel' }) as unknown as SVGGElement;
+    const g = el('g', { class: 'panel', 'data-key': p.key }) as unknown as SVGGElement;
     const t1 = el('text', { x: (p.x! + 4).toFixed(1), y: (p.yTop! + 17).toFixed(1), class: 'panel-name' });
     t1.style.font = FONT_PANEL;
     t1.textContent = p.label;
