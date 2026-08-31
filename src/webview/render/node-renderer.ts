@@ -82,7 +82,8 @@ export class NodeRenderer {
       })
     );
 
-    const head = nd.kind === 'module-cluster' ? nd.name || nd.cls || '' : nd.cls || nd.kind || '';
+    // 聚合卡片只显示模块路径最后一级（完整路径在 tooltip 里）
+    const head = nd.kind === 'module-cluster' ? (nd.name || '').split('.').pop() || nd.cls || '' : nd.cls || nd.kind || '';
     const headT = el('text', { x: 12, y: 17.5, class: 'n-name' });
     headT.style.font = FONT_NAME;
     const pw = nd.params !== undefined ? textW(fmtNum(nd.params), FONT_TYPE) + 12 : 0;

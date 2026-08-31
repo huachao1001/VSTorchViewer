@@ -23,7 +23,8 @@ export function sizeNode(nd: GNode): void {
     return;
   }
   // Netron 风格卡片：标题栏（类名 + 参数量）+ 分隔线 + 信息行（摘要 / 形状）
-  const head = nd.cls || nd.kind || '';
+  // 聚合卡片标题与渲染一致：只取模块路径最后一级
+  const head = nd.kind === 'module-cluster' ? (nd.name || '').split('.').pop() || nd.cls || nd.kind || '' : nd.cls || nd.kind || '';
   let w = textW(head, FONT_NAME);
   if (nd.params !== undefined) w = Math.max(w, 60 + textW(fmtNum(nd.params), FONT_TYPE) + 8);
   if (nd.summary) w = Math.max(w, textW(nd.summary, FONT_SUMMARY));

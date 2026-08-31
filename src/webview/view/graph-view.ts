@@ -42,7 +42,7 @@ export class GraphView {
     private c: Containers
   ) {
     this.details = new DetailsPanel(c.details);
-    this.tree = new TreePanel(c.tree, qname => this.locateModule(qname));
+    this.tree = new TreePanel(c.tree, (qname, isModule) => this.locateTree(qname, isModule));
   }
 
   // ---------- 数据入口 ----------
@@ -170,12 +170,59 @@ export class GraphView {
     this.tree.syncHighlight(primary);
   }
 
-  locateModule(qname: string): void {
-    const nd = this.model.nodes.find(n => n.kind === 'call_module' && (n.target === qname || n.name === qname));
-    if (nd) {
-      this.select(nd.id);
-      this.centerOn(nd.id);
+  // 树 → 图联动：自动切换到能显示目标节点的层级（展开/折叠），选中并居中
+  private locateTree(qname: string, isModule: boolean): void {
+    if (this.model.data?.kind === 'tree') return;
+    const segs = qname.split('.').filter(Boolean);
+    if (!segs.length) {
+      this.fit(); // 根节点：整体适配
+      return;
     }
+    const d = segs.length;
+    const lv = this.model.levels;
+
+    // 模块 → 该深度的层级；无直属算子（该深度不在层级表）→ 更深一级展示其子级
+    // 叶子算子 → 全细节层
+    let li: number;
+    if (isModule) {
+      li = lv.indexOf(d);
+      if (li < 0) li = lv.findIndex(x => x > d);
+      if (li < 0) li = lv.length - 1;
+    } else {
+      li = lv.length - 1;
+    }
+    if (this.model.level !== li) {
+      this.model.setLevel(li);
+      // 同步缩放值到该层级的带宽中点，否则下一次滚轮缩放会被 syncLevel 弹回原层级
+      this.view.k = this.kForLevel(li);
+      this.renderGraph();
+    }
+
+    // 目标节点：簇卡片（模块，被省略的前缀下钻到子卡片）→ 按名称/分组匹配
+    let nd =
+      this.model.nodes.find(n => n.clusterKey === qname) ??
+      this.model.nodes.find(n => n.clusterKey && n.clusterKey.startsWith(qname + '.'));
+    if (!nd) {
+      nd = this.model.nodes.find(
+        n => !n.virtual && ((n.kind === 'call_module' && (n.target === qname || n.name === qname)) || n.group === qname || n.name === qname)
+      );
+    }
+    if (!nd) {
+      // 参数/缓冲等叶子在图中无对应节点 → 回退到父模块
+      const parent = segs.slice(0, -1).join('.');
+      if (parent) {
+        this.locateTree(parent, true);
+      }
+      return;
+    }
+    this.select(nd.id);
+    this.centerOn(nd.id);
+  }
+
+  // 让 view.k 与程序化层级切换保持一致（否则下一次滚轮缩放会被 syncLevel 弹回）
+  private kForLevel(li: number): number {
+    const step = (1.5 - K_MIN) / Math.max(1, this.model.levels.length - 1);
+    return clamp(K_MIN + (li + 0.5) * step, K_MIN, 8);
   }
 
   // ---------- 视图变换 ----------

@@ -222,7 +222,7 @@ export class GraphModel {
     }
 
     // 紧凑 dagre 重排 + 背景盒填充烘焙（两遍布局，布局后零位移，路由点原生有效）
-    const { points, rankOf } = dagreWithPadding(this.nodes, aggEdges, { nodesep: 28, edgesep: 10, ranksep: 46 }, depth - 1, this.omit);
+    const { points, rankOf } = dagreWithPadding(this.nodes, aggEdges, { nodesep: 20, edgesep: 8, ranksep: 34 }, depth - 1, this.omit);
     this.rankOf = rankOf;
     const chains = EdgeRouter.fromDagre(points, aggEdges, this.idx, rankOf);
 
@@ -247,7 +247,7 @@ export class GraphModel {
     this.nodes.forEach(nd => sizeNode(nd));
 
     const maxLayer = Math.max(0, ...data.nodes.filter(n => n.group).map(n => n.group!.split('.').length));
-    const { points, rankOf } = dagreWithPadding(this.nodes, data.edges, { nodesep: 34, edgesep: 10, ranksep: 70 }, maxLayer, this.omit);
+    const { points, rankOf } = dagreWithPadding(this.nodes, data.edges, { nodesep: 24, edgesep: 8, ranksep: 44 }, maxLayer, this.omit);
     this.rankOf = rankOf;
     this.fullNodes = this.nodes;
     this.fullIdx = this.idx;
@@ -538,7 +538,7 @@ function computePadding(
 
   ranks.forEach((ns, r) => {
     // 该排上下各外扩 max(上邻排需求的盒头部分, 下邻排需求的盒底部分)，保证相邻排间隙足够
-    const m = Math.max(topStack(r) + 7, bottomPad(r) + 7);
+    const m = Math.max(topStack(r) + 4, bottomPad(r) + 4);
     if (m > 0) ns.forEach(n => inflV.set(n.id, 2 * m));
   });
 
