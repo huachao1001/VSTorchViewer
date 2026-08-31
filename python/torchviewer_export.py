@@ -353,6 +353,57 @@ def node_summary(cls, attrs):
         return None
 
 
+# ---------- 计算量估算 ----------
+
+def _prod(xs):
+    r = 1
+    for x in xs:
+        r *= x
+    return r
+
+
+def _arg_shapes(n, shapes):
+    # 节点参数中 fx Node 的输出形状列表
+    return [shapes.get(a.name) for a in _iter_nodes(list(n.args) + list(n.kwargs.values()))]
+
+
+def _node_macs(n, shapes, modules):
+    # 常见算子的 MACs（乘加次数）估算；无法识别返回 0
+    import torch.nn as nn
+
+    out = shapes.get(n.name)
+    if not out:
+        return 0
+    try:
+        if n.op == "call_module":
+            m = modules.get(n.target)
+            if isinstance(m, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                k = _prod(m.kernel_size)
+                return _prod(out) * (m.in_channels // m.groups) * k
+            if isinstance(m, nn.Linear):
+                return _prod(out[:-1]) * m.in_features * m.out_features
+            return 0
+        if n.op == "call_function":
+            fn = getattr(n.target, "__name__", str(n.target))
+            a = _arg_shapes(n, shapes)
+            if fn in ("conv1d", "conv2d", "conv3d") and len(a) >= 2 and a[1]:
+                w = a[1]
+                groups = n.kwargs.get("groups", 1) or 1
+                return _prod(out) * (w[1] // groups) * _prod(w[2:])
+            if fn == "linear" and len(a) >= 2 and a[1]:
+                return _prod(out) * a[1][-1]
+            if fn in ("matmul", "bmm", "addmm") and len(a) >= 2 and a[0] and a[1] and len(a[0]) >= 2 and len(a[1]) >= 2:
+                return _prod(out) * a[0][-1]
+            return 0
+        if n.op == "call_method" and n.target in ("matmul", "bmm"):
+            a = _arg_shapes(n, shapes)
+            if len(a) >= 2 and a[0] and a[1] and len(a[0]) >= 2 and len(a[1]) >= 2:
+                return _prod(out) * a[0][-1]
+        return 0
+    except Exception:
+        return 0
+
+
 def export_graph(model, input_shapes, model_name):
     import torch
     import torch.fx as fx
@@ -396,6 +447,9 @@ def export_graph(model, input_shapes, model_name):
         shp = shapes.get(n.name)
         if shp is not None:
             rec["out_shape"] = shp
+        macs = _node_macs(n, shapes, modules)
+        if macs > 0:
+            rec["macs"] = macs
         if n.op == "placeholder":
             placeholders.append(rec)
         if n.op == "call_module":
@@ -456,6 +510,7 @@ def export_graph(model, input_shapes, model_name):
                 rec["shape"] = nodes[src]["out_shape"]
             outputs.append(rec)
 
+    total_macs = sum(r.get("macs", 0) for r in nodes)
     data = {
         "ok": True,
         "kind": "graph",
@@ -466,6 +521,8 @@ def export_graph(model, input_shapes, model_name):
         "outputs": outputs,
         "tree": build_tree(model, model_name),
         "total_params": count_params(model),
+        "total_macs": total_macs,
+        "total_flops": total_macs * 2,
     }
     if errors:
         data["warning"] = "部分形状推断失败：" + "；".join(errors[:2])

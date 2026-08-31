@@ -10,53 +10,6 @@ body {
   overflow: hidden;
 }
 
-/* ---------- 工具栏 ---------- */
-#toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
-  background: var(--vscode-sideBar-background, transparent);
-}
-#toolbar button {
-  width: 26px; height: 26px;
-  border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
-  background: transparent;
-  color: var(--vscode-editor-foreground, inherit);
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  opacity: .8;
-}
-#toolbar button:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,.15)); }
-#search-wrap { position: relative; margin-left: 8px; }
-#search {
-  width: 220px; padding: 4px 10px;
-  background: var(--vscode-input-background, rgba(0,0,0,.2));
-  color: var(--vscode-input-foreground, inherit);
-  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,.3)));
-  border-radius: 5px;
-  outline: none;
-}
-#search:focus { border-color: var(--vscode-focusBorder, #4a9eff); }
-#search-list {
-  position: absolute; top: 32px; left: 0; z-index: 10;
-  min-width: 280px; max-height: 260px; overflow: auto;
-  background: var(--vscode-editorWidget-background, #252526);
-  color: var(--vscode-editorWidget-foreground, inherit);
-  border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
-  border-radius: 6px;
-  box-shadow: 0 4px 14px rgba(0,0,0,.35);
-  display: none;
-}
-#search-list:has(.search-item) { display: block; }
-.search-item { padding: 5px 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 12px; }
-.search-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }
-.search-item span:last-child { opacity: .6; font-size: 11px; font-family: Consolas, monospace; }
-#model-name { margin-left: auto; opacity: .75; font-family: Consolas, monospace; font-size: 12px; }
-
 /* ---------- 布局 ---------- */
 #main { flex: 1; display: flex; min-height: 0; }
 #tree-panel { width: 250px; min-width: 150px; max-width: 70vw; overflow: auto; padding: 8px 6px; background: var(--vscode-sideBar-background, transparent); }
@@ -67,10 +20,27 @@ body {
 #tree-splitter:hover, #tree-splitter.active { background: var(--vscode-focusBorder, #0078d4); }
 #graph-area { flex: 1; min-width: 0; position: relative; }
 #svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
-#details { width: 300px; overflow: auto; border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); padding: 12px 14px; background: var(--vscode-sideBar-background, transparent); }
+#details { width: 300px; min-width: 220px; display: flex; flex-direction: column; border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); background: var(--vscode-sideBar-background, transparent); }
+.details-body { flex: 1 1 auto; overflow: auto; padding: 12px 14px; }
+#details-summary { flex: none; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); padding: 10px 14px; font-size: 12px; max-height: 40%; overflow: auto; }
+#details-summary .s-row { display: flex; gap: 10px; margin: 3px 0; align-items: baseline; }
+#details-summary .s-k { flex: none; opacity: .6; min-width: 44px; }
+#details-summary .s-v { font-family: Consolas, monospace; word-break: break-all; }
+#details-summary .s-v i { opacity: .55; font-style: normal; font-size: 11px; }
 
 /* ---------- 模块树面板 ---------- */
 .panel-title { font-weight: 600; opacity: .65; margin: 2px 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.tree-search {
+  width: calc(100% - 12px); margin: 0 6px 8px; padding: 6px 10px; box-sizing: border-box;
+  background: var(--vscode-input-background, rgba(0,0,0,.2));
+  color: var(--vscode-input-foreground, inherit);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,.3)));
+  border-radius: 5px; outline: none; font-size: 13px;
+}
+.tree-search:focus { border-color: var(--vscode-focusBorder, #4a9eff); }
+.tree-search::placeholder { color: var(--vscode-input-placeholderForeground, rgba(128,128,128,.7)); }
+.tree-empty { opacity: .55; font-size: 12px; margin: 4px 8px; }
+.tree-item mark, .tree-leaf mark { background: rgba(245,166,35,.32); color: inherit; border-radius: 2px; padding: 0 1px; }
 .tree-item details { margin-left: 12px; }
 .tree-item > details > summary { list-style: none; cursor: pointer; display: flex; justify-content: flex-start; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 4px; }
 .t-caret { flex: none; width: 20px; text-align: center; opacity: .65; font-size: 15px; line-height: 1; cursor: pointer; }

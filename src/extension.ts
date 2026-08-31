@@ -293,13 +293,6 @@ function openViewer(context: vscode.ExtensionContext, payload: any, fileName: st
 <link rel="stylesheet" href="${cssUri}">
 </head>
 <body>
-<div id="toolbar">
-  <button id="btn-zoom-in" title="放大">＋</button>
-  <button id="btn-zoom-out" title="缩小">－</button>
-  <button id="btn-fit" title="适应视图">⤢</button>
-  <div id="search-wrap"><input id="search" placeholder="搜索节点…" /><div id="search-list"></div></div>
-  <span id="model-name"></span>
-</div>
 <div id="main">
   <div id="tree-panel"></div>
   <div id="tree-splitter" title="拖拽调整宽度"></div>

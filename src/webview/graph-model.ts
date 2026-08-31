@@ -147,12 +147,13 @@ export class GraphModel {
       if (nd.out_shape && nd.out_shape.length) c.shape = nd.out_shape;
     }
 
-    // 直属算子卡片消除：模块在当前层级已拆出子卡片时，其直属算子（如 stem 里的 cat/getitem）
-    // 不再组装成与模块同名的卡片，改为散列节点——同一模块组合只对应一个节点
+    // 卡片消解：模块只含 1 个算子（单成员卡片），或当前层级已拆出子卡片时只剩直属算子的卡片，
+    // 都不显示该组合模块，直接展示下一层节点
     const dissolved: GNode[] = [];
     for (const key of [...clusters.keys()]) {
       const c = clusters.get(key)!;
-      if (!hasDeeper.has(key) || !c.members.every(id => this.fullIdx.get(id)!.group === key)) continue;
+      const directOnly = c.members.every(id => this.fullIdx.get(id)!.group === key);
+      if (c.members.length !== 1 && !(hasDeeper.has(key) && directOnly)) continue;
       for (const id of c.members) dissolved.push(this.fullIdx.get(id)!);
       clusters.delete(key);
     }
@@ -337,8 +338,8 @@ export class GraphModel {
       }
     }
     for (const p of byKey.values()) {
-      // 盒内只有 1 张簇卡片 = 纯嵌套，不显示；含真实算子（哪怕 1 个）则显示
-      if (p.nodes.length === 1 && p.nodes[0].kind === 'module-cluster') continue;
+      // 盒内只有 1 个节点（簇卡片或算子）= 纯封装层，不显示盒子，直接展示下一层节点
+      if (p.nodes.length === 1) continue;
       this.panels.push(p);
     }
     // 几何：按嵌套深度向外扩展，保证每层盒严格内含于外层盒，且各层标题条带互不重叠

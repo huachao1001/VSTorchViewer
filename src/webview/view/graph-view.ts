@@ -25,7 +25,6 @@ interface Containers {
 export class GraphView {
   private view = { k: 1, tx: 40, ty: 40 };
   private sel: Selection | null = null;
-  private searchHits = new Set<number>();
   private nodeRenderer = new NodeRenderer();
   private edgeRenderer = new EdgeRenderer();
   private panelRenderer = new PanelRenderer();
@@ -49,8 +48,6 @@ export class GraphView {
 
   onData(data: GraphData): void {
     this.model.load(data, this.view.k);
-    const name = document.getElementById('model-name')!;
-    name.textContent = (data.model || '') + (data.total_params !== undefined ? ` · ${fmtParams(data.total_params)}` : '');
     if (data.kind === 'tree') this.renderTreeMode();
     else this.renderGraph();
     this.tree.render(data);
@@ -514,32 +511,6 @@ export class GraphView {
     return null;
   }
 
-  // ---------- 搜索 ----------
-
-  private refreshHits(): void {
-    this.c.nodesG.querySelectorAll('.node').forEach(g => g.classList.toggle('hit', this.searchHits.has(Number((g as SVGGElement).dataset.id))));
-  }
-
-  private onSearch(query: string): void {
-    const q = query.trim().toLowerCase();
-    const list = document.getElementById('search-list')!;
-    this.searchHits.clear();
-    if (!q) {
-      list.innerHTML = '';
-      this.refreshHits();
-      return;
-    }
-    const hits = this.model.nodes.filter(
-      n => !n.virtual && ((n.name || '') + ' ' + (n.cls || '') + ' ' + (n.target || '') + ' ' + (n.group || '')).toLowerCase().includes(q)
-    );
-    hits.slice(0, 10).forEach(n => this.searchHits.add(n.id));
-    this.refreshHits();
-    list.innerHTML = hits
-      .slice(0, 10)
-      .map(n => `<div class="search-item" data-id="${n.id}"><span>${escHtml(n.name || n.kind || '')}</span><span>${escHtml(n.cls || '')}</span></div>`)
-      .join('');
-  }
-
   // ---------- 交互 ----------
 
   init(): void {
@@ -588,19 +559,6 @@ export class GraphView {
       e.stopPropagation();
       this.select(Number((g as SVGGElement).dataset.id));
     });
-    document.getElementById('btn-zoom-in')!.addEventListener('click', () => this.zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 1.25));
-    document.getElementById('btn-zoom-out')!.addEventListener('click', () => this.zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 0.8));
-    document.getElementById('btn-fit')!.addEventListener('click', () => this.fit());
-    const search = document.getElementById('search')! as HTMLInputElement;
-    search.addEventListener('input', () => this.onSearch(search.value));
-    const list = document.getElementById('search-list')!;
-    list.addEventListener('click', e => {
-      const it = (e.target as Element).closest('.search-item');
-      if (!it) return;
-      const id = Number((it as HTMLElement).dataset.id);
-      this.select(id);
-      this.centerOn(id);
-    });
   }
 }
 
@@ -623,10 +581,6 @@ function fmtParams(n: number): string {
 
 function fmtShapeText(s?: number[]): string {
   return s && s.length ? '[' + s.join(', ') + ']' : '';
-}
-
-function escHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // 节点集合的世界包围盒；空集合返回 null

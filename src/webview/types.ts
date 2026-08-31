@@ -21,6 +21,7 @@ export interface GNode {
   summary?: string;
   clusterKey?: string;
   virtual?: boolean;
+  macs?: number;
   // 模块树（回退视图）专用
   children?: GNode[];
   rank?: number;
@@ -71,6 +72,8 @@ export interface GraphData {
   root?: GNode;
   tree?: GNode;
   total_params?: number;
+  total_macs?: number;
+  total_flops?: number;
 }
 
 // 选中记忆：跨层级传播（模块 ↔ 成员算子）
