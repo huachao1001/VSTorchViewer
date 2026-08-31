@@ -38,9 +38,10 @@ export class GraphView {
 
   constructor(
     private model: GraphModel,
-    private c: Containers
+    private c: Containers,
+    hooks?: { applyShape?: (shape: string) => void }
   ) {
-    this.details = new DetailsPanel(c.details);
+    this.details = new DetailsPanel(c.details, hooks?.applyShape);
     this.tree = new TreePanel(c.tree, (qname, isModule) => this.locateTree(qname, isModule));
   }
 
@@ -146,6 +147,27 @@ export class GraphView {
     const nd = id >= 0 ? this.model.idx.get(id) : undefined;
     this.sel = nd ? { id, group: nd.group ?? null, isCluster: nd.kind === 'module-cluster' } : null;
     this.applySelection();
+  }
+
+  // 点击组合背景盒：选中该模块（成员联动高亮），详情面板显示聚合信息
+  selectPanel(key: string): void {
+    const p = this.model.panels.find(x => x.key === key);
+    if (!p) return;
+    const agg: GNode = {
+      id: -1,
+      name: key,
+      kind: 'module-cluster',
+      cls: p.clss[0] || 'Module',
+      group: key,
+      group_cls: p.clss[0],
+      params: p.params,
+      summary: `${p.nodes.length} 个算子`,
+      clusterKey: key,
+    };
+    this.sel = { id: -1, group: key, isCluster: true };
+    this.applySelection();
+    this.details.show(agg, this.model.data);
+    this.tree.syncHighlight(agg);
   }
 
   private applySelection(): void {
@@ -548,10 +570,16 @@ export class GraphView {
       this.view.ty = pan.ty + dy;
       this.apply();
     });
-    svg.addEventListener('pointerup', () => {
+    svg.addEventListener('pointerup', e => {
       const was = pan;
       pan = null;
-      if (was && !was.moved) this.select(-1);
+      if (!was || was.moved) return;
+      // 点击落点在组合背景盒内 → 选中该模块并在右侧显示聚合信息；空白处 → 清除选中
+      const r = svg.getBoundingClientRect();
+      const w: Pt = { x: (e.clientX - r.left - this.view.tx) / this.view.k, y: (e.clientY - r.top - this.view.ty) / this.view.k };
+      const panel = this.smallestPanelAt(w);
+      if (panel) this.selectPanel(panel.key);
+      else this.select(-1);
     });
     this.c.nodesG.addEventListener('pointerdown', e => {
       const g = (e.target as Element).closest('.node');

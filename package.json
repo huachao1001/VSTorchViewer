@@ -33,14 +33,14 @@
       "editor/title": [
         {
           "command": "torchviewer.visualizeFile",
-          "when": "resourceLangId == python || resourceExtname == .pt || resourceExtname == .pth || resourceExtname == .pkl || resourceExtname == .ckpt || resourceExtname == .bin",
+          "when": "resourceExtname == .py",
           "group": "navigation"
         }
       ],
       "explorer/context": [
         {
           "command": "torchviewer.visualizeFile",
-          "when": "resourceExtname == .py || resourceExtname == .pt || resourceExtname == .pth || resourceExtname == .pkl || resourceExtname == .ckpt || resourceExtname == .bin"
+          "when": "resourceExtname == .py"
         }
       ]
     },

@@ -30,6 +30,8 @@ def _write(path, obj):
 
 def import_from_file(path):
     # 加载目标 .py 文件为模块
+    # 提前布置搜索路径：脚本目录 → （相对导入时的）父目录 → 当前工作目录，
+    # 确保脚本内 import 同目录模块/子包时能正常解析
     path = os.path.abspath(path)
     d = os.path.dirname(path)
     # 含相对导入（from .xxx import）时按包内模块加载：父目录加入 sys.path，
@@ -41,16 +43,18 @@ def import_from_file(path):
         has_relative = False
     pkg = os.path.basename(d)
     stem = os.path.splitext(os.path.basename(path))[0]
+    paths = [d]
     if has_relative and pkg.isidentifier() and stem.isidentifier():
-        parent = os.path.dirname(d)
-        if parent not in sys.path:
-            sys.path.insert(0, parent)
+        paths.append(os.path.dirname(d))
         name = f"{pkg}.{stem}"
     else:
-        # 普通脚本：把文件目录加入 sys.path，便于绝对导入同目录模块
-        if d not in sys.path:
-            sys.path.insert(0, d)
         name = "torchviewer_target_" + str(abs(hash(path)) % 10 ** 8)
+    cwd = os.getcwd()
+    if cwd not in paths:
+        paths.append(cwd)
+    for p in paths:
+        if p not in sys.path:
+            sys.path.insert(0, p)
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载文件: {path}")
@@ -70,6 +74,35 @@ def find_module_classes(mod):
         if isinstance(obj, type) and issubclass(obj, nn.Module) and obj.__module__ == mod.__name__:
             out.append(name)
     return sorted(out)
+
+
+def class_params(cls):
+    # 构造参数表（跳过 self 和 *args/**kwargs）：名称 / 是否必填 / 默认值 repr（Python 字面量，可直接回填表单）
+    import inspect
+
+    try:
+        sig = inspect.signature(cls)
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for p in list(sig.parameters.values())[1:]:
+        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+            continue
+        item = {"name": p.name, "required": p.default is p.empty}
+        if p.default is not p.empty:
+            try:
+                item["default"] = repr(p.default)
+            except Exception:
+                pass
+        if p.annotation is not p.empty:
+            try:
+                s = str(p.annotation)
+                if s:
+                    item["annotation"] = s
+            except Exception:
+                pass
+        out.append(item)
+    return out
 
 
 def build_model(mod, cls_name, expr):
@@ -429,7 +462,11 @@ def export_graph(model, input_shapes, model_name):
             "warning": f"符号追踪失败，已回退为模块树视图：{te}",
         }
 
-    shapes, errors = propagate_shapes(gm, input_shapes)
+    # 未提供输入形状时跳过形状传播（节点无 out_shape，MACs/FLOPs 不计算）
+    if input_shapes:
+        shapes, errors = propagate_shapes(gm, input_shapes)
+    else:
+        shapes, errors = {}, []
     modules = dict(model.named_modules())
 
     nodes = []
@@ -490,7 +527,7 @@ def export_graph(model, input_shapes, model_name):
 
     # 输入：形状缺失时用用户提供的形状兜底
     for i, rec in enumerate(placeholders):
-        if rec.get("out_shape") is None and i < len(input_shapes):
+        if rec.get("out_shape") is None and input_shapes and i < len(input_shapes):
             rec["out_shape"] = list(input_shapes[i])
     inputs = [{"name": r["name"], "shape": r.get("out_shape")} for r in placeholders]
 
@@ -557,79 +594,6 @@ def build_tree(m, name):
     return node
 
 
-def _count_state_dict_total(sd):
-    t = 0
-    for v in sd.values():
-        if hasattr(v, "numel"):
-            try:
-                t += v.numel()
-            except Exception:
-                pass
-    return t
-
-
-def tree_from_state_dict(sd):
-    # 从 state_dict 重建模块层级（叶子为参数张量）
-    mods = {}
-    root_params = []
-    for k, v in sd.items():
-        if not hasattr(v, "shape"):
-            continue
-        parts = k.split(".")
-        entry = {"id": next(_ID), "name": parts[-1], "cls": "Parameter", "shape": list(v.shape), "dtype": str(getattr(v, "dtype", "")), "params": v.numel()}
-        if len(parts) == 1:
-            root_params.append(entry)
-        else:
-            mods.setdefault(".".join(parts[:-1]), []).append(entry)
-
-    tree = {}
-    for path in mods:
-        cur = tree
-        for part in path.split("."):
-            cur = cur.setdefault(part, {})
-
-    def _sum_params(nd):
-        t = 0
-        for c in nd["children"]:
-            if c.get("children") is not None:
-                t += _sum_params(c)
-            else:
-                t += c.get("params", 0)
-        return t
-
-    def convert(d, path):
-        name = path.rpartition(".")[2] if path else "state_dict"
-        node = {"id": next(_ID), "name": name, "cls": "Module", "params": 0, "children": []}
-        for cname, csub in d.items():
-            node["children"].append(convert(csub, f"{path}.{cname}" if path else cname))
-        node["children"].extend(mods.get(path, []))
-        node["params"] = _sum_params(node)
-        return node
-
-    root = convert(tree, "")
-    root["children"].extend(root_params)
-    root["params"] += sum(p["params"] for p in root_params)
-    return root
-
-
-# ---------- 权重文件加载 ----------
-
-def load_ckpt(path):
-    # 兼容 torch>=2.6 默认 weights_only 的变化；失败再尝试 TorchScript
-    import torch
-
-    try:
-        try:
-            return torch.load(path, map_location="cpu", weights_only=False)
-        except TypeError:
-            return torch.load(path, map_location="cpu")
-    except Exception as e:
-        try:
-            return torch.jit.load(path, map_location="cpu")
-        except Exception:
-            raise RuntimeError(f"加载权重失败：{e}")
-
-
 # ---------- 输入形状解析 ----------
 
 def parse_input(s):
@@ -649,10 +613,9 @@ def parse_input(s):
 def main():
     ap = argparse.ArgumentParser(description="TorchViewer 导出器")
     ap.add_argument("--file", help="目标 .py 文件")
-    ap.add_argument("--ckpt", help="模型权重文件")
     ap.add_argument("--model", help="nn.Module 类名")
     ap.add_argument("--build", help='构造表达式，如 "Model(num_classes=10)"')
-    ap.add_argument("--input", default="1,3,224,224", help="输入形状，多输入用 ; 分隔")
+    ap.add_argument("--input", default="", help="输入形状，多输入用 ; 分隔；留空则不计算形状")
     ap.add_argument("--list", action="store_true", help="列出候选模型类")
     ap.add_argument("--out", required=True, help="输出 JSON 路径")
     a = ap.parse_args()
@@ -670,27 +633,12 @@ def main():
                     getattr(mod, c)()
                 except Exception:
                     inst = False
-                infos.append({"name": c, "instantiable": inst})
+                try:
+                    params = class_params(getattr(mod, c))
+                except Exception:
+                    params = []
+                infos.append({"name": c, "instantiable": inst, "params": params})
             _write(a.out, {"ok": True, "classes": infos})
-            sys.exit(0)
-        if a.ckpt:
-            import torch
-
-            obj = load_ckpt(a.ckpt)
-            if isinstance(obj, torch.nn.Module):
-                data = export_graph(obj, parse_input(a.input), type(obj).__name__)
-            elif isinstance(obj, dict):
-                sd = obj.get("state_dict", obj)
-                data = {
-                    "ok": True,
-                    "kind": "tree",
-                    "model": os.path.basename(a.ckpt),
-                    "root": tree_from_state_dict(sd),
-                    "total_params": _count_state_dict_total(sd),
-                }
-            else:
-                raise RuntimeError(f"不识别的模型对象类型：{type(obj).__name__}")
-            _write(a.out, data)
             sys.exit(0)
         if a.file:
             mod = import_from_file(a.file)
@@ -701,10 +649,10 @@ def main():
                 raise RuntimeError(f"{a.model} 不是该文件中定义的 nn.Module 子类（候选：{'、'.join(classes)}）")
             model_name = a.model or classes[0]
             model = build_model(mod, model_name, a.build)
-            data = export_graph(model, parse_input(a.input), model_name)
+            data = export_graph(model, parse_input(a.input) if a.input.strip() else None, model_name)
             _write(a.out, data)
             sys.exit(0)
-        raise RuntimeError("请指定 --file 或 --ckpt")
+        raise RuntimeError("请指定 --file")
     except SystemExit:
         raise
     except Exception as e:

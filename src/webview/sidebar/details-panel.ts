@@ -4,15 +4,38 @@ import { esc, fmtNum, fmtShape } from '../utils';
 import { nodeColor } from '../categories';
 
 export class DetailsPanel {
-  // body 随选中内容滚动；footer 固定在面板底部，显示模型摘要（不随选中变化）
+  // body 随选中内容滚动；footer 固定在面板底部：输入形状行 + 模型摘要（不随选中变化）
   private body: HTMLElement;
   private footer: HTMLElement;
+  private summaryEl: HTMLElement;
+  private shapeInput: HTMLInputElement;
 
-  constructor(private container: HTMLElement) {
+  constructor(private container: HTMLElement, applyShape?: (shape: string) => void) {
     this.body = document.createElement('div');
     this.body.className = 'details-body';
     this.footer = document.createElement('div');
     this.footer.id = 'details-summary';
+    // 输入形状行：输入后重新导出以计算形状/参数量关联的 MACs、FLOPs
+    const shapeRow = document.createElement('div');
+    shapeRow.className = 'shape-row';
+    this.shapeInput = document.createElement('input');
+    this.shapeInput.className = 'shape-input';
+    this.shapeInput.placeholder = '输入形状，如 1,3,224,224;1,10';
+    this.shapeInput.spellcheck = false;
+    const apply = () => {
+      const v = this.shapeInput.value.trim();
+      if (v) applyShape?.(v);
+    };
+    const btn = document.createElement('button');
+    btn.className = 'shape-apply';
+    btn.textContent = '应用';
+    btn.addEventListener('click', apply);
+    this.shapeInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') apply();
+    });
+    shapeRow.append(this.shapeInput, btn);
+    this.summaryEl = document.createElement('div');
+    this.footer.append(shapeRow, this.summaryEl);
     container.append(this.body, this.footer);
   }
 
@@ -55,10 +78,9 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
   // 底部固定摘要：输入/输出形状、参数量、MACs、FLOPs
   private showSummary(data: GraphData | null): void {
     if (!data || (data.total_params === undefined && !data.total_macs && !data.inputs?.length && !data.outputs?.length)) {
-      this.footer.style.display = 'none';
+      this.summaryEl.innerHTML = '<div class="s-hint">输入形状后计算各节点形状与 MACs/FLOPs</div>';
       return;
     }
-    this.footer.style.display = '';
     const row = (k: string, v: string) => `<div class="s-row"><span class="s-k">${k}</span><span class="s-v">${v}</span></div>`;
     const num = (n: number) => `${fmtNum(n)} <i>(${n.toLocaleString()})</i>`;
     let html = '';
@@ -69,6 +91,6 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
     if (data.total_params !== undefined) html += row('参数量', num(data.total_params));
     if (data.total_macs) html += row('MACs', num(data.total_macs));
     if (data.total_flops) html += row('FLOPs', num(data.total_flops));
-    this.footer.innerHTML = html;
+    this.summaryEl.innerHTML = html;
   }
 }

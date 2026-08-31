@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>TorchViewer Logo</title>
+  <desc>左上角代表模型代码，右下角代表模型可视化，沿对角线分割并留出负空间，暗示代码到可视化图的转换。</desc>
+
+  <!-- 左上区域：代码（活力紫，尖端收尾指向右上角） -->
+  <path d="M 24 24 L 224 24 Q 96 96 24 224 Z"
+        fill="#7C4DFF" stroke="#7C4DFF" stroke-width="12" stroke-linejoin="round"/>
+
+  <!-- 右下区域：可视化（荧光青，尖端收尾指向左下角） -->
+  <path d="M 232 232 L 232 32 Q 160 160 32 232 Z"
+        fill="#00D4C0" stroke="#00D4C0" stroke-width="12" stroke-linejoin="round"/>
+
+  <!-- 代码符号：三条圆角代码行，带缩进 -->
+  <g fill="#FFFFFF">
+    <rect x="44" y="50" width="96" height="11" rx="5.5"/>
+    <rect x="44" y="78" width="72" height="11" rx="5.5"/>
+    <rect x="64" y="106" width="36" height="11" rx="5.5"/>
+  </g>
+
+  <!-- 可视化符号：星型网络图，空心主节点 + 卫星节点，弧线相连 -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9">
+    <path d="M 186 178 Q 207 163 218 140"/>
+    <path d="M 186 178 Q 175 159 154 150"/>
+    <path d="M 186 178 Q 207 191 218 214"/>
+    <path d="M 186 178 Q 162 186 146 206"/>
+  </g>
+  <g fill="#FFFFFF">
+    <circle cx="218" cy="140" r="5"/>
+    <circle cx="154" cy="150" r="5"/>
+    <circle cx="218" cy="214" r="6"/>
+    <circle cx="146" cy="206" r="6"/>
+  </g>
+  <circle cx="186" cy="178" r="10" fill="none" stroke="#FFFFFF" stroke-width="4"/>
+  <circle cx="186" cy="178" r="3" fill="#FFFFFF"/>
+</svg>

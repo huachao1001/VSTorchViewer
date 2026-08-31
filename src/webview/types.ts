@@ -74,6 +74,8 @@ export interface GraphData {
   total_params?: number;
   total_macs?: number;
   total_flops?: number;
+  // 文件内全部 nn.Module 候选与当前展示的类（顶部 tab 切换）；params 用于需要构造参数的类的表单
+  classes?: { name: string; instantiable: boolean; params?: { name: string; required: boolean; default?: string; annotation?: string }[] }[];
 }
 
 // 选中记忆：跨层级传播（模块 ↔ 成员算子）
