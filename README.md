@@ -1,6 +1,6 @@
 # TorchViewer
 
-![TorchViewer Logo](media/logo.svg)
+![TorchViewer Logo](media/logo.png)
 
 像 Netron 一样可视化 PyTorch nn.Module 结构的 VSCode 扩展。
 
