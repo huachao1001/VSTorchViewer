@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "huachao",
   "license": "MIT",
+  "icon": "media/logo.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/huachao1001/VSTorchViewer.git"
