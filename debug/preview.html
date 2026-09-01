@@ -40,11 +40,32 @@
 </div>
 <pre id="err-banner" style="display:none;position:fixed;left:0;right:0;bottom:0;max-height:40%;overflow:auto;z-index:99;margin:0;padding:8px 12px;background:#5c1a1a;color:#ffd7d7;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;"></pre>
 <script>
-  // 桩：与 VS Code webview 提供的 API 保持一致（状态用 localStorage 持久化，刷新不丢）
+  // 桩：与 VS Code webview 提供的 API 保持一致（状态用 localStorage 持久化，刷新不丢）。
+  // export/input 消息转发给调试服务的 /export 端点（服务端代理调用导出器），响应作为扩展消息回送，
+  // 使多 tab 切换 / 构造参数表单 / 输入形状提交在网页里真实生效
   window.acquireVsCodeApi = () => {
     const KEY = '__tv_webview_state__';
+    const dispatch = m => window.dispatchEvent(new MessageEvent('message', { data: m }));
+    const call = params =>
+      fetch('/export?' + params.toString())
+        .then(r => r.json())
+        .then(dispatch)
+        .catch(e => dispatch({ type: 'error', message: String((e && e.message) || e) }));
     return {
-      postMessage() {},
+      postMessage(msg) {
+        if (msg.type === 'export') {
+          const q = new URLSearchParams();
+          q.set('model', String(msg.model || ''));
+          if (msg.args) q.set('args', JSON.stringify(msg.args));
+          if (msg.raw) q.set('raw', String(msg.raw));
+          call(q);
+        } else if (msg.type === 'input') {
+          const q = new URLSearchParams();
+          q.set('input', String(msg.shape || ''));
+          call(q);
+        }
+        // 'ready' 等其余消息：调试服务无需处理
+      },
       getState() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } },
       setState(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} },
     };
@@ -63,18 +84,23 @@
     const x = new XMLHttpRequest();
     x.open('GET', url, true);
     x.onload = () => {
-      try { cb(JSON.parse(x.responseText)); }
-      catch (e) { (errCb || showErr)('JSON 解析失败 ' + url + ': ' + e.message); }
+      try {
+        const obj = JSON.parse(x.responseText);
+        if (x.status >= 400) (errCb || showErr)(obj.error || `HTTP ${x.status}`);
+        else cb(obj);
+      } catch (e) {
+        (errCb || showErr)('JSON 解析失败 ' + url + ': ' + e.message);
+      }
     };
     x.onerror = () => (errCb || showErr)('请求失败 ' + url + ' (status ' + x.status + ')');
     x.send();
   }
 
-  // 加载渲染器与数据
-  getJSON('/graph.json?t=' + Date.now(), data => {
+  // 加载渲染器与初始状态（/state 返回扩展消息形状：{type:'data',...} 或 {type:'form',...}）
+  getJSON('/state?t=' + Date.now(), msg => {
     const s = document.createElement('script');
     s.src = '/media/main.js?t=' + Date.now();
-    s.onload = () => window.dispatchEvent(new MessageEvent('message', { data: { type: 'data', data } }));
+    s.onload = () => window.dispatchEvent(new MessageEvent('message', { data: msg }));
     s.onerror = () => showErr('main.js 加载失败');
     document.body.appendChild(s);
   }, msg => {

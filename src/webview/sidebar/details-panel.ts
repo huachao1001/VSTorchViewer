@@ -86,11 +86,20 @@ export class DetailsPanel {
 ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
   }
 
+  // 已被用户关闭的警告（按 data 对象记忆；重新导出产生新 data → 警告重新出现）
+  private dismissed = new WeakSet<GraphData>();
+
   private showMeta(data: GraphData | null): void {
     let html = '';
-    if (data?.warning) html += `<div class="warn">${esc(data.warning)}</div>`;
+    if (data?.warning && !this.dismissed.has(data)) {
+      html += `<div class="warn"><button class="warn-close" title="关闭">×</button><span>${esc(data.warning)}</span></div>`;
+    }
     html += `<div class="hint">滚轮缩放 · 拖拽平移 · 点击节点查看详情</div>`;
     this.body.innerHTML = html;
+    this.body.querySelector('.warn-close')?.addEventListener('click', () => {
+      if (data) this.dismissed.add(data);
+      this.body.querySelector('.warn')?.remove();
+    });
   }
 
   // 底部固定摘要：输入/输出形状、参数量、MACs、FLOPs

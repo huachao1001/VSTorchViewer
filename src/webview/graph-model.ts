@@ -243,7 +243,8 @@ export class GraphModel {
     }
     for (const [id, k] of [...nodeCluster]) if (!clusters.has(k)) nodeCluster.delete(id);
 
-    // 未分组算子：标签传播，归入邻接最多的模块簇（输入/输出节点保持独立）
+    // 未分组算子：邻接的模块簇唯一时并入该簇；连接多个簇的边界算子保持散列可见
+    //（并入会导致节点仍在渲染列表里、边却聚合到卡片，成为无连线的孤岛）
     const adj = new Map<number, number[]>();
     for (const e of src.edges) {
       if (!adj.has(e.src)) adj.set(e.src, []);
@@ -257,21 +258,13 @@ export class GraphModel {
       changed = false;
       for (const nd of loose) {
         if (nd.kind === 'placeholder' || nd.kind === 'output' || assign.has(nd.id)) continue;
-        const counts = new Map<string, number>();
-        let best: string | null = null;
-        let bestN = 0;
+        const keys = new Set<string>();
         for (const nb of adj.get(nd.id) || []) {
           const c = nodeCluster.get(nb) ?? assign.get(nb);
-          if (!c) continue;
-          const n = (counts.get(c) || 0) + 1;
-          counts.set(c, n);
-          if (n > bestN) {
-            bestN = n;
-            best = c;
-          }
+          if (c) keys.add(c);
         }
-        if (best) {
-          assign.set(nd.id, best);
+        if (keys.size === 1) {
+          assign.set(nd.id, [...keys][0]);
           changed = true;
         }
       }
@@ -310,6 +303,7 @@ export class GraphModel {
     }
     // 松散/IO 节点与被消解的直属算子：用副本参与紧凑布局，避免污染全细节布局的坐标
     for (const nd of [...loose, ...dissolved]) {
+      if (assign.has(nd.id)) continue; // 已并入簇卡片的未分组算子：不再作为散列节点渲染
       nodes.push({ ...this.fullIdx.get(nd.id)! });
     }
     this.nodes = nodes;
