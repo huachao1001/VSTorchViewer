@@ -5,3 +5,4 @@ media/main.js
 .codegraph/
 __pycache__/
 *.pyc
+*.vsix
