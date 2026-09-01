@@ -887,11 +887,14 @@ function openViewer(
   fileName: string,
   onMessage?: (msg: any) => void | Promise<void>
 ) {
-  const panel = vscode.window.createWebviewPanel('torchviewer.viewer', `TorchViewer — ${fileName}`, vscode.ViewColumn.Active, {
+  const panel = vscode.window.createWebviewPanel('torchviewer.viewer', fileName.replace(/\.py$/i, ''), vscode.ViewColumn.Active, {
     enableScripts: true,
     retainContextWhenHidden: true,
   });
   openPanels.set(script.toLowerCase(), panel);
+  // 标签页图标用扩展自带的 logo
+  const logo = vscode.Uri.joinPath(context.extensionUri, 'media', 'logo.svg');
+  panel.iconPath = { light: logo, dark: logo };
   const webview = panel.webview;
   const jsUri = webview.asWebviewUri(vscode.Uri.file(path.join(context.extensionPath, 'media', 'main.js')));
   const cssUri = webview.asWebviewUri(vscode.Uri.file(path.join(context.extensionPath, 'media', 'main.css')));

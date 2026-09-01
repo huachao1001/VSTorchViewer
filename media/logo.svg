@@ -1,35 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
   <title>TorchViewer Logo</title>
-  <desc>左上角代表模型代码，右下角代表模型可视化，沿对角线分割并留出负空间，暗示代码到可视化图的转换。</desc>
+  <desc>两条独立绘制的鱼形模块以 180° 旋转对称互相缠绕：紫色与绿色阴阳相生，鱼眼分别内置代码符号与网络拓扑，寓意代码（模型）与可视化互相依存、互为表里。</desc>
 
-  <!-- 左上区域：代码（活力紫，尖端收尾指向右上角） -->
-  <path d="M 24 24 L 224 24 Q 96 96 24 224 Z"
-        fill="#7C4DFF" stroke="#7C4DFF" stroke-width="12" stroke-linejoin="round"/>
+  <!-- 绿色鱼：头部在下（r44 正圆西弧），身体沿 R94 外弧东行，尾部以 r6 圆角收于东北 -->
+  <path d="M 128 222
+           A 44 44 0 1 1 128 134
+           A 56 56 0 0 0 182.6 65.4
+           A 6 6 0 0 1 192.5 59.6
+           A 94 94 0 0 1 128 222 Z"
+        fill="#00D4C0"/>
 
-  <!-- 右下区域：可视化（荧光青，尖端收尾指向左下角） -->
-  <path d="M 232 232 L 232 32 Q 160 160 32 232 Z"
-        fill="#00D4C0" stroke="#00D4C0" stroke-width="12" stroke-linejoin="round"/>
+  <!-- 紫色鱼：与绿鱼 180° 旋转对称，头部在上（r44 正圆东弧），身体沿 R94 外弧西行，尾部圆角收于西南 -->
+  <path d="M 128 34
+           A 44 44 0 1 1 128 122
+           A 56 56 0 0 0 73.4 190.6
+           A 6 6 0 0 1 63.5 196.4
+           A 94 94 0 0 1 128 34 Z"
+        fill="#7C4DFF"/>
 
-  <!-- 代码符号：三条圆角代码行，带缩进 -->
+  <!-- 鱼眼：互为反色的小圆底，内置简笔图案 -->
+  <circle cx="128" cy="78" r="24" fill="#00D4C0"/>
+  <circle cx="128" cy="178" r="24" fill="#7C4DFF"/>
+
+  <!-- 上鱼眼：代码符号 </> -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 119 70 L 111.5 78 L 119 86"/>
+    <path d="M 137 70 L 144.5 78 L 137 86"/>
+    <path d="M 131.5 67 L 124.5 89"/>
+  </g>
+
+  <!-- 下鱼眼：星型网络拓扑，中心节点连四颗卫星 -->
+  <g stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" opacity="0.95">
+    <path d="M 128 178 L 139 170"/>
+    <path d="M 128 178 L 117 170"/>
+    <path d="M 128 178 L 139 186"/>
+    <path d="M 128 178 L 117 186"/>
+  </g>
   <g fill="#FFFFFF">
-    <rect x="44" y="50" width="96" height="11" rx="5.5"/>
-    <rect x="44" y="78" width="72" height="11" rx="5.5"/>
-    <rect x="64" y="106" width="36" height="11" rx="5.5"/>
+    <circle cx="139" cy="170" r="2.4"/>
+    <circle cx="117" cy="170" r="2.4"/>
+    <circle cx="139" cy="186" r="2.4"/>
+    <circle cx="117" cy="186" r="2.4"/>
   </g>
-
-  <!-- 可视化符号：星型网络图，空心主节点 + 卫星节点，弧线相连 -->
-  <g fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.9">
-    <path d="M 186 178 Q 207 163 218 140"/>
-    <path d="M 186 178 Q 175 159 154 150"/>
-    <path d="M 186 178 Q 207 191 218 214"/>
-    <path d="M 186 178 Q 162 186 146 206"/>
-  </g>
-  <g fill="#FFFFFF">
-    <circle cx="218" cy="140" r="5"/>
-    <circle cx="154" cy="150" r="5"/>
-    <circle cx="218" cy="214" r="6"/>
-    <circle cx="146" cy="206" r="6"/>
-  </g>
-  <circle cx="186" cy="178" r="10" fill="none" stroke="#FFFFFF" stroke-width="4"/>
-  <circle cx="186" cy="178" r="3" fill="#FFFFFF"/>
+  <circle cx="128" cy="178" r="3.4" fill="none" stroke="#FFFFFF" stroke-width="2"/>
+  <circle cx="128" cy="178" r="1.2" fill="#FFFFFF"/>
 </svg>

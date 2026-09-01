@@ -39,7 +39,8 @@
       ],
       "explorer/context": [
         {
-          "command": "torchviewer.visualizeFile"
+          "command": "torchviewer.visualizeFile",
+          "when": "resourceExtname == .py"
         }
       ]
     },
