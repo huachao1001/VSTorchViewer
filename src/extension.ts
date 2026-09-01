@@ -890,7 +890,6 @@ function openViewer(
 <link rel="stylesheet" href="${cssUri}">
 </head>
 <body>
-<div id="model-tabs"></div>
 <div id="main">
   <div id="tree-panel"></div>
   <div id="tree-splitter" title="拖拽调整宽度"></div>
@@ -903,6 +902,8 @@ function openViewer(
       </defs>
     </svg>
     <div id="tv-loading"><div class="spinner"></div><div class="tv-loading-text">正在准备…</div></div>
+    <!-- 模型 tab：session 右上角悬浮，纵向排列 -->
+    <div id="model-tabs"></div>
   </div>
   <div id="details"></div>
 </div>

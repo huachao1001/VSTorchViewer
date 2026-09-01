@@ -93,7 +93,8 @@ const tabs = document.getElementById('model-tabs')!;
 type ClsInfo = NonNullable<GraphData['classes']>[number];
 function renderTabs(classes: ClsInfo[] | undefined, current?: string): void {
   const list = classes || [];
-  if (!list.length) {
+  // 仅一个模型时没有切换意义，隐藏 tab 悬浮层
+  if (list.length < 2) {
     tabs.style.display = 'none';
     return;
   }

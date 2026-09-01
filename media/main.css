@@ -12,7 +12,20 @@ body {
 
 /* ---------- 布局 ---------- */
 /* 模型 tab：按钮外观，选中态用主按钮色高亮 */
-#model-tabs { flex: none; display: flex; justify-content: flex-end; gap: 6px; padding: 8px 10px; overflow-x: auto; }
+/* 模型 tab：session 右上角悬浮、纵向排列（DOM 位于 #graph-area 内） */
+#model-tabs {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 100; /* 盖过加载遮罩（90），解析中仍可切换模型 */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  padding: 2px;
+}
 #model-tabs .tab {
   border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
   background: var(--vscode-button-secondaryBackground, rgba(128,128,128,.18));
