@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "version": "0.1.0",
-  "publisher": "local",
+  "publisher": "huachao",
   "license": "MIT",
   "repository": {
     "type": "git",
