@@ -285,9 +285,14 @@ def _node_shape(n):
 
 def propagate_shapes(gm, input_shapes):
     # 形状传播：优先 FakeTensorProp（允许非 fake 输入，自动转换参数），其次真实张量，最后 meta 张量；失败则返回空表
+    # 注意：ShapeProp 失败信息含整个 GraphModule dump，只保留首行
     import torch
 
     errors = []
+
+    def _err(tag, e):
+        first = str(e).strip().splitlines()[0] if str(e).strip() else ""
+        errors.append(f"{tag}: {first}"[:300])
     try:
         from torch._subclasses.fake_tensor import FakeTensorMode
         from torch.fx.passes.fake_tensor_prop import FakeTensorProp
@@ -301,7 +306,7 @@ def propagate_shapes(gm, input_shapes):
         if shapes:
             return shapes, errors
     except Exception as e:
-        errors.append(f"FakeTensorProp: {e}")
+        _err("FakeTensorProp", e)
     try:
         from torch.fx.passes.shape_prop import ShapeProp
 
@@ -312,7 +317,7 @@ def propagate_shapes(gm, input_shapes):
         if shapes:
             return shapes, errors
     except Exception as e:
-        errors.append(f"ShapeProp(real): {e}")
+        _err("ShapeProp(real)", e)
     try:
         from torch.fx.passes.shape_prop import ShapeProp
 
@@ -323,7 +328,7 @@ def propagate_shapes(gm, input_shapes):
         if shapes:
             return shapes, errors
     except Exception as e:
-        errors.append(f"ShapeProp(meta): {e}")
+        _err("ShapeProp(meta)", e)
     return {}, errors
 
 # ---------- 计算图导出 ----------
