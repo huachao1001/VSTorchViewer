@@ -30,6 +30,12 @@ interface Session {
 }
 const sessions = new Map<string, Session>();
 let activeSession: Session | undefined;
+// 已提交的构造参数（按模型记忆）：详情面板右下角的常驻参数表单用它回填，可重新编辑后再次导出；
+// 重新弹表单时也作为默认值预填（尽量沿用上次填写）
+const lastArgsByModel = new Map<string, Record<string, string>>();
+// 最近一次请求导出的模型 + 最近收到的类清单：自动导出失败时用于判断是否需要重新拉起参数表单
+let lastExportModel = '';
+let lastClasses: ClsInfo[] = [];
 
 function getSession(name: string): Session {
   let s = sessions.get(name);
@@ -58,6 +64,13 @@ function getSession(name: string): Session {
   }, {
     // 输入形状在预览界面内提交，重导出后由扩展推送新数据
     applyShape: shape => vscode.postMessage({ type: 'input', shape }),
+    // 构造参数表单（右下角常驻）：回填最近提交的参数，可重新编辑后再次导出
+    getArgs: model => lastArgsByModel.get(model),
+    submitArgs: (model, args) => {
+      lastArgsByModel.set(model, args);
+      lastExportModel = model;
+      vscode.postMessage({ type: 'export', model, args });
+    },
   });
   view.init();
   const formLayer = document.createElement('div');
@@ -91,7 +104,10 @@ function renderTabs(classes: ClsInfo[] | undefined, current?: string): void {
     b.className = 'tab' + (c.name === current ? ' active' : '');
     b.textContent = c.name;
     if (!c.instantiable) b.title = '需要构造参数';
-    b.addEventListener('click', () => vscode.postMessage({ type: 'export', model: c.name }));
+    b.addEventListener('click', () => {
+      lastExportModel = c.name;
+      vscode.postMessage({ type: 'export', model: c.name });
+    });
     tabs.appendChild(b);
   }
 }
@@ -240,12 +256,13 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
     label.className = 'f-label';
     label.textContent = p.name + (p.annotation ? ` : ${p.annotation}` : '');
     label.title = p.required ? '必填' : '可选';
-    const input = document.createElement('input');
-    input.className = 'f-input';
-    input.spellcheck = false;
-    input.value = p.default ?? '';
-    input.placeholder = p.required ? '必填，Python 字面量' : '留空用默认值';
-    inputs.set(p.name, input);
+      const input = document.createElement('input');
+      input.className = 'f-input';
+      input.spellcheck = false;
+      // 预填优先级：上次提交值 > 类默认值（尽量沿用上次填写）
+      input.value = lastArgsByModel.get(model)?.[p.name] ?? p.default ?? '';
+      input.placeholder = p.required ? '必填，Python 字面量' : '留空用默认值';
+      inputs.set(p.name, input);
     row.append(label, input);
     form.appendChild(row);
   }
@@ -273,6 +290,7 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
       err.textContent = '';
       btn.disabled = true;
       btn.textContent = '导出中…';
+      lastExportModel = model;
       vscode.postMessage({ type: 'export', model, raw: v });
       return;
     }
@@ -293,6 +311,8 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
     err.textContent = '';
     btn.disabled = true;
     btn.textContent = '导出中…';
+    lastArgsByModel.set(model, args);
+    lastExportModel = model;
     vscode.postMessage({ type: 'export', model, args });
   };
   btn.addEventListener('click', submit);
@@ -321,6 +341,11 @@ window.addEventListener('message', e => {
     hideProgress();
     const data = m2.data as GraphData;
     const name = String(data.model || data.classes?.[0]?.name || '');
+    if (data.classes?.length) lastClasses = data.classes;
+    lastExportModel = name;
+    // 扩展/调试服务随数据附带实际使用的构造参数 → 回填表单记忆（右下角表单与再次弹表单的预填来源）
+    const extra = data as unknown as { __tvArgs?: Record<string, string> };
+    if (extra.__tvArgs && Object.keys(extra.__tvArgs).length) lastArgsByModel.set(name, extra.__tvArgs);
     const s = getSession(name);
     const key = String((data as unknown as { __tvKey?: string }).__tvKey || '');
     setActiveSession(s);
@@ -338,12 +363,27 @@ window.addEventListener('message', e => {
     if (!formActive) showProgress(String(m2.text || '正在解析…'));
   } else if (m2.type === 'error') {
     if (formActive) showFormError(String(m2.message || '解析失败'));
-    else showLoadError(String(m2.message || '解析失败'));
+    else {
+      // 自动导出失败（如记忆参数与新输入不匹配）：该模型需要传参 → 重新拉起参数表单
+      //（已有表单则原样恢复，保留用户编辑），错误内联显示在表单内；否则走全屏错误
+      const cls = lastClasses.find(c => c.name === lastExportModel);
+      if (cls && !cls.instantiable) {
+        hideProgress();
+        formActive = true;
+        const s = getSession(lastExportModel);
+        setActiveSession(s);
+        renderForm(s, lastExportModel, lastClasses);
+        showFormError(String(m2.message || '解析失败'));
+      } else showLoadError(String(m2.message || '解析失败'));
+    }
   } else if (m2.type === 'tabs') {
+    lastClasses = m2.classes || [];
     renderTabs(m2.classes, m2.model);
   } else if (m2.type === 'form' && m2.model) {
     // 表单是 tab content 的一部分：切换到该会话（图区显示表单，左树/右详情切到本会话空状态）
     const name = String(m2.model);
+    lastExportModel = name;
+    lastClasses = m2.classes || lastClasses;
     const s = getSession(name);
     setActiveSession(s);
     hideProgress();

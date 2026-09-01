@@ -1,16 +1,28 @@
 // DetailsPanel：右侧节点详情（元信息 / 选中节点属性 / 模块 attrs）+ 底部固定模型摘要
+// 需传参模型导出后，参数表单常驻面板最底部：可重新编辑并再次导出
 import type { GNode, GraphData } from '../types';
 import { esc, fmtNum, fmtShape } from '../utils';
 import { nodeColor } from '../categories';
 
+export interface DetailsHooks {
+  applyShape?: (shape: string) => void;
+  getArgs?: (model: string) => Record<string, string> | undefined;
+  submitArgs?: (model: string, args: Record<string, string>) => void;
+}
+
 export class DetailsPanel {
-  // body 随选中内容滚动；footer 固定在面板底部：输入形状行 + 模型摘要（不随选中变化）
+  // body 随选中内容滚动；footer 固定在面板底部：输入形状行 + 模型摘要（不随选中变化）；
+  // argsEl 最底部：构造参数表单（仅需传参模型显示）
   private body: HTMLElement;
   private footer: HTMLElement;
   private summaryEl: HTMLElement;
   private shapeInput: HTMLInputElement;
+  private argsEl: HTMLElement;
+  // 当前参数表单归属：模型 + 数据键（模型不变仅保留编辑态；重导出后按键刷新回填）
+  private argsModel: string | null = null;
+  private argsKey = '';
 
-  constructor(private container: HTMLElement, applyShape?: (shape: string) => void) {
+  constructor(private container: HTMLElement, private hooks?: DetailsHooks) {
     // 每个会话有自己的面板实例但共享同一容器：挂载前清空，避免多会话 DOM 叠加
     container.innerHTML = '';
     this.body = document.createElement('div');
@@ -26,7 +38,7 @@ export class DetailsPanel {
     this.shapeInput.spellcheck = false;
     const apply = () => {
       const v = this.shapeInput.value.trim();
-      if (v) applyShape?.(v);
+      if (v) this.hooks?.applyShape?.(v);
     };
     const btn = document.createElement('button');
     btn.className = 'shape-apply';
@@ -38,14 +50,16 @@ export class DetailsPanel {
     shapeRow.append(this.shapeInput, btn);
     this.summaryEl = document.createElement('div');
     this.footer.append(shapeRow, this.summaryEl);
-    container.append(this.body, this.footer);
+    this.argsEl = document.createElement('div');
+    this.argsEl.id = 'details-args';
+    container.append(this.body, this.footer, this.argsEl);
   }
 
   // 会话切换后本实例的 DOM 可能被其他会话顶掉：重新挂载（输入形状等状态保留在元素上）
   private ensureMounted(): void {
     if (!this.body.isConnected) {
       this.container.innerHTML = '';
-      this.container.append(this.body, this.footer);
+      this.container.append(this.body, this.footer, this.argsEl);
     }
   }
 
@@ -58,6 +72,7 @@ export class DetailsPanel {
 
   show(nd: GNode | null, data: GraphData | null): void {
     this.ensureMounted();
+    this.rebuildArgs(data);
     this.showSummary(data);
     if (!nd) {
       this.showMeta(data);
@@ -90,6 +105,7 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
   private dismissed = new WeakSet<GraphData>();
 
   private showMeta(data: GraphData | null): void {
+    this.rebuildArgs(data);
     let html = '';
     if (data?.warning && !this.dismissed.has(data)) {
       html += `<div class="warn"><button class="warn-close" title="关闭">×</button><span>${esc(data.warning)}</span></div>`;
@@ -119,5 +135,75 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
     if (data.total_macs) html += row('MACs', num(data.total_macs));
     if (data.total_flops) html += row('FLOPs', num(data.total_flops));
     this.summaryEl.innerHTML = html;
+  }
+
+  // 构造参数表单（右下角常驻）：仅需传参的模型显示；模型不变不重建（保留编辑中内容），
+  // 重导出后数据键变化 → 用已提交参数回填刷新
+  private rebuildArgs(data: GraphData | null): void {
+    const model = String(data?.model || '');
+    const cls = data?.classes?.find(c => c.name === model);
+    const params = cls && !cls.instantiable ? cls.params || [] : [];
+    const key = model + '|' + String((data as { __tvKey?: string } | null)?.__tvKey || '');
+    if (!model || !params.length) {
+      if (this.argsModel !== null || this.argsEl.childNodes.length) {
+        this.argsModel = null;
+        this.argsKey = '';
+        this.argsEl.innerHTML = '';
+      }
+      return;
+    }
+    if (this.argsModel === model && this.argsKey === key) return;
+    this.argsModel = model;
+    this.argsKey = key;
+    const submitted = this.hooks?.getArgs?.(model) || {};
+    this.argsEl.innerHTML = '';
+    const title = document.createElement('div');
+    title.className = 'args-title';
+    title.textContent = '构造参数 · 可修改后重新导出';
+    const form = document.createElement('div');
+    form.className = 'tv-form';
+    const inputs = new Map<string, HTMLInputElement>();
+    for (const p of params) {
+      const row = document.createElement('div');
+      row.className = 'f-row';
+      const label = document.createElement('span');
+      label.className = 'f-label';
+      label.textContent = p.name + (p.annotation ? ` : ${p.annotation}` : '');
+      label.title = p.required ? '必填' : '可选';
+      const input = document.createElement('input');
+      input.className = 'f-input';
+      input.spellcheck = false;
+      input.value = submitted[p.name] ?? p.default ?? '';
+      input.placeholder = p.required ? '必填，Python 字面量' : '留空用默认值';
+      inputs.set(p.name, input);
+      row.append(label, input);
+      form.appendChild(row);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'f-actions';
+    const btn = document.createElement('button');
+    btn.className = 'f-apply';
+    btn.textContent = '重新导出';
+    btn.addEventListener('click', () => {
+      const out: Record<string, string> = {};
+      let bad = false;
+      for (const [name, input] of inputs) {
+        input.classList.remove('missing');
+        const v = input.value.trim();
+        if (!v && params.find(x => x.name === name)!.required) {
+          input.classList.add('missing');
+          bad = true;
+          continue;
+        }
+        if (v) out[name] = v;
+      }
+      if (bad) return;
+      btn.disabled = true;
+      btn.textContent = '导出中…';
+      this.hooks?.submitArgs?.(model, out);
+    });
+    actions.appendChild(btn);
+    form.appendChild(actions);
+    this.argsEl.append(title, form);
   }
 }

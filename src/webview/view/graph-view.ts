@@ -39,9 +39,9 @@ export class GraphView {
   constructor(
     private model: GraphModel,
     private c: Containers,
-    hooks?: { applyShape?: (shape: string) => void }
+    hooks?: { applyShape?: (shape: string) => void; getArgs?: (model: string) => Record<string, string> | undefined; submitArgs?: (model: string, args: Record<string, string>) => void }
   ) {
-    this.details = new DetailsPanel(c.details, hooks?.applyShape);
+    this.details = new DetailsPanel(c.details, hooks);
     this.tree = new TreePanel(c.tree, (qname, isModule) => this.locateTree(qname, isModule));
   }
 

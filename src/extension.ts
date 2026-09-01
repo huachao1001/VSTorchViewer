@@ -589,12 +589,12 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
     let lastArgs: Record<string, string> | undefined;
     let lastRaw: string | undefined;
     let scriptMtime = 0;
-    // 表单记忆：填过一次的参数按 (脚本, 模型) 记忆（内存 + 落盘），切回 tab 直接复用；
-    // 原始 .py 文件改动（mtime 变化）后失效，重新弹表单
+    // 表单记忆：填过一次的参数按 (脚本, 模型) 记忆（内存 + 落盘），切回 tab 或脚本被编辑后都先尝试复用；
+    // 只在自动导出失败（类签名变更/参数非法）时才回退重新弹表单，脚本内容改动本身不影响构造参数
     const formMemo = new Map<string, { args?: Record<string, string>; raw?: string }>();
     const readFormMemo = (model: string): { args?: Record<string, string>; raw?: string } | undefined => {
       const e = readCache(context, cacheKey(['form', script, model]));
-      if (e && e.v === CACHE_VERSION && e.mtime === scriptMtime && (e.args || e.raw)) {
+      if (e && e.v === CACHE_VERSION && (e.args || e.raw)) {
         return { args: e.args, raw: e.raw };
       }
       return undefined;
@@ -732,7 +732,12 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
           const argKey = hasArgs ? JSON.stringify(args, Object.keys(args).sort()) : '';
           const gKey = cacheKey(['graph', script, model, input || '', argKey || (raw ? `${model}(${raw})` : '')]);
           const withKey = (p: any): any => {
-            if (p) p.__tvKey = gKey; // 供 webview 判断是否同一份数据（切 tab 命中缓存时跳过重渲染）
+            if (p) {
+              p.__tvKey = gKey; // 供 webview 判断是否同一份数据（切 tab 命中缓存时跳过重渲染）
+              // 附带实际使用的构造参数：webview 用它回填表单记忆（重开文件自动渲染后右下角表单能预填真实值）
+              if (hasArgs) p.__tvArgs = args;
+              else if (raw) p.__tvRaw = raw;
+            }
             return attachMeta(p, model);
           };
           const cachedGraph = readCache(context, gKey);
@@ -767,7 +772,8 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
             return;
           }
         }
-        const payload = await exportOnce(def.name);
+        // 命中表单记忆时必须带上记忆的构造参数，否则 Python 端走裸 cls() 报"无法实例化"
+        const payload = await exportOnce(def.name, lastInput, lastArgs, lastRaw);
         if (!payload) throw new Error('导出进程结束但未写出结果文件');
         log('导出完成，已推送到预览');
         sender.post({ type: 'data', data: payload });

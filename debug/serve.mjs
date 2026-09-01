@@ -37,6 +37,29 @@ const MIME = {
 
 const TMP_OUT = path.join(os.tmpdir(), 'torchviewer-export.json');
 const TMP_LIST = path.join(os.tmpdir(), 'torchviewer-classes.json');
+// 表单记忆落盘（按目标文件区分）：服务重启后仍能"上次填写的参数直接续跑"
+const MEMO_PATH = path.join(os.tmpdir(), `torchviewer-memo-${path.basename(TARGET_FILE || 'debug')}.json`);
+let memoDisk = null;
+const loadMemo = () => {
+  if (!memoDisk) {
+    try {
+      memoDisk = JSON.parse(fs.readFileSync(MEMO_PATH, 'utf8'));
+    } catch {
+      memoDisk = {};
+    }
+  }
+  return memoDisk;
+};
+const saveMemo = (model, entry) => {
+  const m = loadMemo();
+  m[model] = entry;
+  memoDisk = m;
+  try {
+    fs.writeFileSync(MEMO_PATH, JSON.stringify(m));
+  } catch {
+    /* 落盘失败不影响内存记忆 */
+  }
+};
 
 const runExporter = args =>
   new Promise((resolve, reject) => {
@@ -59,6 +82,11 @@ const lastRun = new Map(); // model → {args, raw, input}
 async function listClasses() {
   await runExporter(['--list', '--file', TARGET_FILE, '--out', TMP_LIST]);
   classes = JSON.parse(fs.readFileSync(TMP_LIST, 'utf8')).classes || [];
+  // 磁盘表单记忆 → 内存（服务重启后"上次填写直接续跑"仍生效）
+  const memo = loadMemo();
+  for (const [model, entry] of Object.entries(memo)) {
+    if (classes.some(c => c.name === model) && !lastRun.has(model)) lastRun.set(model, entry);
+  }
 }
 
 async function exportModel(model, opts = {}) {
@@ -71,11 +99,14 @@ async function exportModel(model, opts = {}) {
   else if (raw) cli.push('--build', `${model}(${raw})`);
   if (input) cli.push('--input', input);
   lastRun.set(model, { args, raw, input });
+  saveMemo(model, { args, raw, input });
   currentModel = model;
   await runExporter(cli);
   const data = JSON.parse(fs.readFileSync(TMP_OUT, 'utf8'));
   if (!data.ok) return { type: 'error', message: data.error || '导出失败' };
   data.classes = classes;
+  // 附带实际使用的构造参数：webview 回填表单记忆（右下角表单预填真实值）
+  if (args && Object.keys(args).length) data.__tvArgs = args;
   // 渲染缓存键：模型/参数/形状/文件任一变化才重渲染（对齐扩展侧行为）
   data.__tvKey = JSON.stringify([model, args || null, raw || null, input || null, fs.statSync(TARGET_FILE).mtimeMs]);
   return { type: 'data', data };
@@ -143,8 +174,9 @@ http
         const raw = q.get('raw') || '';
         const input = q.has('input') ? q.get('input') : undefined;
         const cls = classes.find(c => c.name === model);
-        // 需传参类且未提交参数 → 表单态（对齐扩展侧行为）
-        if (cls && !cls.instantiable && !args && !raw) {
+        // 需传参类：无新提交参数且无历史记忆 → 表单态；有记忆（上次填写）→ 直接续跑导出
+        const memoArgs = lastRun.get(model)?.args;
+        if (cls && !cls.instantiable && !args && !raw && !(memoArgs && Object.keys(memoArgs).length)) {
           state = { type: 'form', model, classes };
         } else {
           state = await exportModel(model, { args, raw, input }).catch(e => ({ type: 'error', message: String(e.message || e) }));
