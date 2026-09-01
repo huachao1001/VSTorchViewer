@@ -550,6 +550,83 @@ function cacheFresh(entry: any, mtime: number): boolean {
   return !!entry && entry.v === CACHE_VERSION && entry.mtime === mtime;
 }
 
+// 沿父类链静态判定 .py 源码中是否定义了 nn.Module 子类（预检用，避免为无关文件启动 Python）。
+// 返回 true=确定有；false=文件里没有 class 或所有基类都能在文件内解析且无一是 nn.Module；
+// undefined=存在外部基类（import 进来的类无法静态确认），放行交给 Python 侧 import 后最终裁决。
+function detectTorchModule(src: string): boolean | undefined {
+  // 拼接跨行括号（基类列表/调用换行），保证 class 头与 import 都在单行内
+  const lines: string[] = [];
+  let depth = 0;
+  for (const raw of src.split(/\r?\n/)) {
+    const t = raw.trim();
+    if (depth > 0 && lines.length) lines[lines.length - 1] += ' ' + t;
+    else lines.push(raw);
+    for (const ch of t) {
+      if ('([{'.includes(ch)) depth++;
+      else if (')]}'.includes(ch)) depth = Math.max(0, depth - 1);
+    }
+  }
+  // 导入别名 → 完整路径（仅跟踪 torch 系），如 tnn→torch.nn、M→torch.nn.Module
+  const aliases: Record<string, string> = {};
+  for (const l of lines) {
+    let m = /^\s*import\s+(.+)$/.exec(l);
+    if (m) {
+      for (const item of m[1].split(',')) {
+        const pm = /^\s*([\w.]+)(?:\s+as\s+(\w+))?\s*$/.exec(item);
+        if (pm && pm[1].startsWith('torch') && pm[2]) aliases[pm[2]] = pm[1];
+      }
+      continue;
+    }
+    m = /^\s*from\s+([\w.]+)\s+import\s+(.+)$/.exec(l);
+    if (m) {
+      for (const item of m[2].split(',')) {
+        const im = /^\s*(\w+)(?:\s+as\s+(\w+))?\s*$/.exec(item);
+        if (im) {
+          const full = `${m[1]}.${im[1]}`;
+          if (full.startsWith('torch')) aliases[im[2] || im[1]] = full;
+        }
+      }
+    }
+  }
+  const resolve = (dotted: string): string => {
+    const parts = dotted.split('.');
+    const bound = aliases[parts[0]];
+    return bound ? [bound, ...parts.slice(1)].join('.') : dotted;
+  };
+  // 本文件 class 定义：名称 → 基类列表
+  const classMap = new Map<string, string[]>();
+  for (const l of lines) {
+    const m = /^\s*class\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?\s*:/.exec(l);
+    if (!m) continue;
+    const bases: string[] = [];
+    for (const tok of (m[2] || '').split(',')) {
+      const b = tok.replace(/\[.*\]/g, '').trim(); // 去掉泛型下标 Base[T]
+      if (b && !b.includes('=') && !/^(self|cls)$/.test(b)) bases.push(b);
+    }
+    classMap.set(m[1], bases);
+  }
+  if (!classMap.size) return false;
+  const isModule = (name: string, seen: Set<string>): boolean | undefined => {
+    if (seen.has(name)) return false;
+    seen.add(name);
+    const bases = classMap.get(name);
+    if (!bases) return undefined; // 非本文件定义的类：无法静态判定
+    for (const b of bases) {
+      if (resolve(b) === 'torch.nn.Module') return true;
+      const r = isModule(b, seen);
+      if (r !== false) return r;
+    }
+    return false;
+  };
+  let ambiguous = false;
+  for (const name of classMap.keys()) {
+    const r = isModule(name, new Set());
+    if (r === true) return true;
+    if (r === undefined) ambiguous = true;
+  }
+  return ambiguous ? undefined : false;
+}
+
 async function visualize(context: vscode.ExtensionContext, out: vscode.OutputChannel, uri?: vscode.Uri) {
   try {
     uri = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
@@ -569,11 +646,12 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
       void vscode.window.showWarningMessage('TorchViewer 仅支持包含 nn.Module 的 .py 文件');
       return;
     }
-    let hasModule = false;
+    // 静态沿父类链判定是否定义了 nn.Module 子类；外部基类无法确认时放行（Python 侧 import 后最终裁决）
+    let hasModule: boolean | undefined = false;
     try {
-      hasModule = /\bnn\.Module\b/.test(fs.readFileSync(script, 'utf-8'));
+      hasModule = detectTorchModule(fs.readFileSync(script, 'utf-8'));
     } catch {}
-    if (!hasModule) {
+    if (hasModule === false) {
       void vscode.window.showWarningMessage('未检测到 nn.Module，TorchViewer 仅解析包含 nn.Module 的 Python 文件');
       return;
     }

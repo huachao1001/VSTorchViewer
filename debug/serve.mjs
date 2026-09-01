@@ -61,9 +61,9 @@ const saveMemo = (model, entry) => {
   }
 };
 
-const runExporter = args =>
+const runExporter = (args, py = PYTHON) =>
   new Promise((resolve, reject) => {
-    const p = spawn(PYTHON, [path.join(ROOT, 'python', 'torchviewer_export.py'), ...args], { cwd: ROOT });
+    const p = spawn(py, [path.join(ROOT, 'python', 'torchviewer_export.py'), ...args], { cwd: ROOT });
     let err = '';
     p.stderr.on('data', d => (err += d));
     p.on('error', reject);
@@ -74,13 +74,62 @@ const runExporter = args =>
     });
   });
 
+// 依赖缺失（ModuleNotFoundError）时自动追加所有 conda 环境重试，成功后记忆解释器（对齐扩展侧行为）
+let condaPys = null;
+const getCondaPys = () =>
+  new Promise(resolve => {
+    if (condaPys) return resolve(condaPys);
+    import('node:child_process').then(({ exec }) =>
+      exec('conda env list', { encoding: 'utf-8', timeout: 15000 }, (err, stdout) => {
+        const pys = [];
+        if (!err && stdout) {
+          for (const line of String(stdout).split(/\r?\n/)) {
+            if (line.trim().startsWith('#')) continue;
+            const parts = line.trim().split(/\s+/).filter(Boolean).filter(p => p !== '*');
+            if (!parts.length) continue;
+            const py = process.platform === 'win32' ? path.join(parts.at(-1), 'python.exe') : path.join(parts.at(-1), 'bin', 'python');
+            try {
+              if (fs.statSync(py).isFile()) pys.push(py);
+            } catch {}
+          }
+        }
+        condaPys = pys;
+        resolve(pys);
+      })
+    );
+  });
+const PY_MEMO_KEY = '__py__';
+const runExporterSmart = async args => {
+  const memo = loadMemo()[PY_MEMO_KEY];
+  const cands = [...new Set([memo, PYTHON, ...(await getCondaPys())].filter(Boolean))];
+  let depErr = '';
+  for (const py of cands) {
+    try {
+      await runExporter(args, py);
+      if (py !== PYTHON) {
+        console.log(`[解释器] 默认环境依赖缺失，已切换: ${py}`);
+        saveMemo(PY_MEMO_KEY, { py });
+      }
+      return;
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (/No module named|ModuleNotFoundError/i.test(msg)) {
+        depErr = msg.split('\n')[0];
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error(depErr || '导出失败');
+};
+
 let classes = []; // 类清单（--list 缓存，多 tab 数据源）
 let state = null; // 当前推送状态：{type:'data',data} | {type:'form',model,classes}
 let currentModel = ''; // 最近导出的模型（输入形状变更时重导出用）
 const lastRun = new Map(); // model → {args, raw, input}
 
 async function listClasses() {
-  await runExporter(['--list', '--file', TARGET_FILE, '--out', TMP_LIST]);
+  await runExporterSmart(['--list', '--file', TARGET_FILE, '--out', TMP_LIST]);
   classes = JSON.parse(fs.readFileSync(TMP_LIST, 'utf8')).classes || [];
   // 磁盘表单记忆 → 内存（服务重启后"上次填写直接续跑"仍生效）
   const memo = loadMemo();
@@ -101,7 +150,7 @@ async function exportModel(model, opts = {}) {
   lastRun.set(model, { args, raw, input });
   saveMemo(model, { args, raw, input });
   currentModel = model;
-  await runExporter(cli);
+  await runExporterSmart(cli);
   const data = JSON.parse(fs.readFileSync(TMP_OUT, 'utf8'));
   if (!data.ok) return { type: 'error', message: data.error || '导出失败' };
   data.classes = classes;

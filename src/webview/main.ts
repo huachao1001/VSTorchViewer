@@ -153,7 +153,7 @@ if (splitter) {
   getActive: () => activeSession,
 };
 
-// 加载遮罩：解析期间显示进度（转圈 + 文字），失败显示错误（点击关闭）
+// 加载遮罩：解析期间显示进度（转圈 + 文字），失败显示错误（点击空白处隐藏，不做文字提示）
 // 日志不在这里展示：统一走 VS Code 输出面板（TorchViewer）
 // 扩展 HTML 里自带该节点；浏览器调试预览没有则动态创建
 let loadingEl: HTMLElement | undefined;
@@ -202,7 +202,7 @@ function showLoadError(message: string): void {
   ensureCore(el);
   el.style.display = 'flex';
   const t = el.querySelector('.tv-loading-text') as HTMLElement;
-  if (t) t.textContent = `${message}（点击关闭）`;
+  if (t) t.textContent = message;
 }
 // 表单填写期间出错（如导出失败）：错误提示显示在当前会话的表单内，表单保留供修改重填，不关闭
 function showFormError(message: string): void {

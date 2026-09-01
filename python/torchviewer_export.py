@@ -44,6 +44,22 @@ def import_from_file(path):
     pkg = os.path.basename(d)
     stem = os.path.splitext(os.path.basename(path))[0]
     paths = [d]
+    # 源码里 import 的顶层包名：d/<top> 已覆盖的不处理；顶层包实际位于 d 的父目录时补加父目录
+    # （如脚本在 models/ 下却写 `from models.xxx import`，包根是 models 的父目录）
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            src_head = f.read()
+        tops = set(re.findall(r"^\s*(?:from|import)\s+(\w+)", src_head, re.M))
+        parent = os.path.dirname(d)
+        for top in tops:
+            if top in ("torch", "os", "sys", "re", "json"):
+                continue
+            in_d = os.path.isdir(os.path.join(d, top)) or os.path.isfile(os.path.join(d, top + ".py"))
+            in_parent = os.path.isdir(os.path.join(parent, top)) or os.path.isfile(os.path.join(parent, top + ".py"))
+            if not in_d and in_parent and parent not in paths:
+                paths.append(parent)
+    except Exception:
+        pass
     if has_relative and pkg.isidentifier() and stem.isidentifier():
         paths.append(os.path.dirname(d))
         name = f"{pkg}.{stem}"
