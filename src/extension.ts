@@ -27,16 +27,12 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 // ---------- 日志 ----------
-// 双写：输出面板（完整历史）+ 预览面板遮罩内的实时日志窗（当前在做什么一目了然）
+// 所有日志统一走 VS Code 输出面板（TorchViewer），预览窗口内不显示日志
 let LOG_OUT: vscode.OutputChannel | undefined;
-let LOG_WEB: ((text: string) => void) | undefined;
 function log(msg: string): void {
   const t = new Date().toTimeString().slice(0, 8);
   try {
     LOG_OUT?.appendLine(`[${t}] ${msg}`);
-  } catch {}
-  try {
-    LOG_WEB?.(msg);
   } catch {}
 }
 
@@ -211,7 +207,83 @@ function extractBalancedJson(text: string, start: number): string | undefined {
   return undefined;
 }
 
+// 从单个工作区存储目录的 state.vscdb（含 WAL）解析 python-envs 选择 JSON
+// db 正被 VS Code 持续重写（EBUSY/中间态），且同一 JSON 在页内有多个历史副本：
+// - 锁定导致直接读失败 → 复制到临时目录再读
+// - 扫描全部出现位置并合并（后出现的片段覆盖先出现的，空值不覆盖非空），避免撞上旧副本
+function readDbEnvSelections(dir: string): Record<string, unknown>[] {
+  const merged: Record<string, unknown> = {};
+  let found = false;
+  for (const db of [path.join(dir, 'state.vscdb'), path.join(dir, 'state.vscdb-wal')]) {
+    let text: string;
+    try {
+      if (!fs.existsSync(db)) continue;
+      try {
+        text = fs.readFileSync(db, 'utf8');
+      } catch {
+        const tmp = path.join(os.tmpdir(), `tv-db-${cacheKey([db])}.bin`);
+        fs.copyFileSync(db, tmp);
+        text = fs.readFileSync(tmp, 'utf8');
+      }
+    } catch {
+      continue;
+    }
+    const needle = '"ms-python.vscode-python-envs:';
+    let idx = text.indexOf(needle);
+    while (idx >= 0) {
+      const objStart = text.lastIndexOf('{', idx);
+      if (objStart >= 0) {
+        const raw = extractBalancedJson(text, objStart);
+        if (raw) {
+          try {
+            const obj = JSON.parse(raw);
+            for (const [k, v] of Object.entries(obj)) {
+              if (!k.startsWith('ms-python.vscode-python-envs:')) continue;
+              found = true;
+              const prev = merged[k];
+              // 标量/数组：后值直接覆盖；映射表：按键合并，非空后值覆盖
+              if (v && typeof v === 'object' && !Array.isArray(v) && prev && typeof prev === 'object' && !Array.isArray(prev)) {
+                merged[k] = { ...(prev as Record<string, unknown>), ...(v as Record<string, unknown>) };
+              } else if (v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length)) {
+                merged[k] = v;
+              }
+            }
+          } catch {}
+        }
+      }
+      idx = text.indexOf(needle, idx + needle.length);
+    }
+  }
+  return found ? [merged] : [];
+}
+
+// 从选择 JSON 提取解释器路径；scriptN 传入时只取覆盖该脚本的工作区选择，传 undefined 时取全部
+// 注意：正则捕获组 m[2] 是 'WORKSPACE' / 'GLOBAL'（_SELECTED 在组外）
+function pickInterpreters(objs: Record<string, unknown>[], scriptN: string | undefined, out: string[]): void {
+  const norm = (p: string) => p.toLowerCase().replace(/\//g, '\\');
+  for (const obj of objs) {
+    for (const [k, v] of Object.entries(obj)) {
+      const m = /^(.*):(WORKSPACE|GLOBAL)_SELECTED$/.exec(k);
+      if (!m) continue;
+      if (m[2] === 'WORKSPACE' && v && typeof v === 'object') {
+        for (const [fk, env] of Object.entries(v as Record<string, unknown>)) {
+          if (scriptN === undefined || scriptN.startsWith(norm(fk))) {
+            const py = pyInterpreterFromEnvPrefix(String(env));
+            if (py && !out.includes(py)) out.push(py);
+          }
+        }
+      } else if (m[2] === 'GLOBAL' && typeof v === 'string') {
+        const py = pyInterpreterFromEnvPrefix(v);
+        if (py && !out.includes(py)) out.push(py);
+      }
+    }
+  }
+}
+
+// 优先读 VS Code 磁盘存储（state.vscdb）里的解释器选择，跨窗口可读：
+// 1) 目标脚本所属工作区的选择；2) 未命中时按最近使用顺序扫描所有工作区的选择（脚本在桌面等无工作区位置的场景）
 function readStoredSelectedInterpreters(scriptPath: string): string[] {
+  log('读取 VS Code db 环境配置（workspaceStorage/state.vscdb）…');
   const out: string[] = [];
   try {
     const norm = (p: string) => p.toLowerCase().replace(/\//g, '\\');
@@ -224,6 +296,8 @@ function readStoredSelectedInterpreters(scriptPath: string): string[] {
           path.join(appData, 'VSCodium', 'User', 'workspaceStorage'),
         ]
       : [];
+    // 汇总全部工作区存储目录，按最近使用（mtime 新→旧）排序
+    const dirs: { dir: string; mtime: number }[] = [];
     for (const root of roots) {
       let hashes: string[] = [];
       try {
@@ -231,85 +305,84 @@ function readStoredSelectedInterpreters(scriptPath: string): string[] {
       } catch {
         continue;
       }
-      // 找出包含目标脚本的工作区（最长前缀优先）
-      let best: { folderN: string; dir: string } | undefined;
       for (const h of hashes) {
         const dir = path.join(root, h);
-        let wj: string;
         try {
-          wj = fs.readFileSync(path.join(dir, 'workspace.json'), 'utf-8');
-        } catch {
-          continue;
-        }
-        let folders: string[] = [];
-        try {
-          const j = JSON.parse(wj);
-          folders = j.folder ? [j.folder] : (j.folders || []).map((f: any) => f.uri);
-        } catch {
-          continue;
-        }
-        for (const u of folders) {
-          let f: string;
-          try {
-            f = decodeURIComponent(String(u).replace(/^file:\/\/\//, ''));
-          } catch {
-            continue;
-          }
-          const fN = norm(f);
-          if ((scriptN.startsWith(fN + '\\') || scriptN === fN) && (!best || fN.length > best.folderN.length)) {
-            best = { folderN: fN, dir };
-          }
-        }
+          dirs.push({ dir, mtime: fs.statSync(dir).mtimeMs });
+        } catch {}
       }
-      if (!best) continue;
-      // 读该工作区 state.vscdb（含 WAL）里的 python-envs 选择
-      for (const db of [path.join(best.dir, 'state.vscdb'), path.join(best.dir, 'state.vscdb-wal')]) {
-        let text: string;
-        try {
-          if (!fs.existsSync(db)) continue;
-          text = fs.readFileSync(db, 'utf8');
-        } catch {
-          continue;
-        }
-        const keyAt = text.indexOf('"ms-python.vscode-python-envs:');
-        if (keyAt < 0) continue;
-        const objStart = text.lastIndexOf('{', keyAt);
-        if (objStart < 0) continue;
-        const raw = extractBalancedJson(text, objStart);
-        if (!raw) continue;
-        let obj: Record<string, unknown>;
-        try {
-          obj = JSON.parse(raw);
-        } catch {
-          continue;
-        }
-        for (const [k, v] of Object.entries(obj)) {
-          const m = /^(.*):(WORKSPACE|GLOBAL)_SELECTED$/.exec(k);
-          if (!m) continue;
-          if (m[2] === 'WORKSPACE_SELECTED' && v && typeof v === 'object') {
-            for (const [fk, env] of Object.entries(v as Record<string, unknown>)) {
-              if (scriptN.startsWith(norm(fk))) {
-                const py = pyInterpreterFromEnvPrefix(String(env));
-                if (py && !out.includes(py)) out.push(py);
-              }
-            }
-          } else if (m[2] === 'GLOBAL_SELECTED' && typeof v === 'string') {
-            const py = pyInterpreterFromEnvPrefix(v);
-            if (py && !out.includes(py)) out.push(py);
-          }
-        }
-      }
-      if (out.length) break;
     }
+    dirs.sort((a, b) => b.mtime - a.mtime);
+
+    // 1) 脚本所属工作区（最长前缀优先）→ 读它的 db 选择
+    let best: { folderN: string; dir: string } | undefined;
+    for (const { dir } of dirs) {
+      let wj: string;
+      try {
+        wj = fs.readFileSync(path.join(dir, 'workspace.json'), 'utf-8');
+      } catch {
+        continue;
+      }
+      let folders: string[] = [];
+      try {
+        const j = JSON.parse(wj);
+        folders = j.folder ? [j.folder] : (j.folders || []).map((f: any) => f.uri);
+      } catch {
+        continue;
+      }
+      for (const u of folders) {
+        let f: string;
+        try {
+          f = decodeURIComponent(String(u).replace(/^file:\/\/\//, ''));
+        } catch {
+          continue;
+        }
+        const fN = norm(f);
+        if ((scriptN.startsWith(fN + '\\') || scriptN === fN) && (!best || fN.length > best.folderN.length)) {
+          best = { folderN: fN, dir };
+        }
+      }
+    }
+    if (best) {
+      pickInterpreters(readDbEnvSelections(best.dir), scriptN, out);
+      if (out.length) {
+        log(`db 命中（脚本所属工作区）: ${out.join(' → ')}`);
+        return filterExisting(out);
+      }
+    }
+
+    // 2) 脚本不在任何工作区内（或该工作区没设过解释器）→ 扫描最近使用的工作区 db 选择
+    log('脚本不属于已打开的工作区，按最近使用扫描各工作区 db 环境选择…');
+    for (const { dir } of dirs.slice(0, 10)) {
+      pickInterpreters(readDbEnvSelections(dir), undefined, out);
+      if (out.length >= 3) break;
+    }
+    if (out.length) log(`db 命中（最近工作区选择）: ${out.join(' → ')}`);
+    else log('db 中未找到任何环境选择');
+    return filterExisting(out);
   } catch (e) {
     log(`读取 VS Code 存储的环境选择失败: ${(e as Error).message}`);
   }
   return out;
 }
 
+// 过滤掉磁盘上不存在的解释器路径（db 里可能残留远端/WSL 等无效记录，如 /bin/python3）
+function filterExisting(pys: string[]): string[] {
+  const ok = pys.filter(py => {
+    try {
+      return fs.statSync(py).isFile();
+    } catch {
+      return false;
+    }
+  });
+  const dropped = pys.filter(p => !ok.includes(p));
+  if (dropped.length) log(`db 中的无效解释器路径（已跳过）: ${dropped.join(' → ')}`);
+  return ok;
+}
+
 async function buildPythonCandidates(resource?: vscode.Uri): Promise<string[]> {
   const cands: string[] = [];
-  // 1) VS Code 磁盘存储的环境选择（目标文件所属工作区，跨窗口可读）
+  // 1) VS Code 磁盘存储的环境选择（db 配置优先；脚本无所属工作区时回退扫最近使用的工作区）
   if (resource) {
     const stored = readStoredSelectedInterpreters(resource.fsPath);
     if (stored.length) {
@@ -450,8 +523,8 @@ function showError(out: vscode.OutputChannel, e: unknown) {
 
 // ---------- 导出结果缓存 ----------
 // 结果落盘到 globalStorage；同一文件（mtime 未变）+ 同模型/输入再次打开时直接恢复，跳过 Python 导出
-// 结构格式变更时递增 CACHE_VERSION，旧缓存整体失效
-const CACHE_VERSION = '1';
+// 结构格式变更时递增 CACHE_VERSION，旧缓存整体失效（v2：类清单含 params 表单数据）
+const CACHE_VERSION = '2';
 
 function cacheKey(parts: string[]): string {
   return crypto.createHash('sha1').update(parts.join('\u0000')).digest('hex').slice(0, 20);
@@ -510,22 +583,26 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
 
     // 先打开面板（带加载动画），后续解析过程把进度 / 结果 / 错误推送到面板内
     let classes: ClassInfo[] = [];
-    let exportOnce: ((model: string, input?: string, args?: Record<string, string>) => Promise<any>) | undefined;
+    let exportOnce: ((model: string, input?: string, args?: Record<string, string>, raw?: string) => Promise<any>) | undefined;
     let currentModel: string | undefined;
     let lastInput: string | undefined;
     let lastArgs: Record<string, string> | undefined;
+    let lastRaw: string | undefined;
     const sender = openViewer(context, path.basename(script), async msg => {
-      if (msg?.type === 'openLog') {
-        out.show();
-        return;
-      }
       if (!exportOnce) return;
       if (msg?.type === 'export' && typeof msg.model === 'string' && classes.some(c => c.name === msg.model)) {
+        // 切换模型时清空上个模型的表单值，避免串用
+        if (msg.model !== currentModel) {
+          lastArgs = undefined;
+          lastRaw = undefined;
+        }
         currentModel = msg.model;
-        lastArgs = msg.args && typeof msg.args === 'object' ? (msg.args as Record<string, string>) : undefined;
-        // 需要构造参数且表单尚未提交 → 推送参数表单而不是直接导出
+        if (msg.args && typeof msg.args === 'object') lastArgs = msg.args as Record<string, string>;
+        if (typeof msg.raw === 'string' && msg.raw.trim()) lastRaw = msg.raw.trim();
+        // 需要构造参数且表单尚未提交 → 推送参数表单而不是直接导出（无参类直接导出）
         const cls = classes.find(c => c.name === msg.model);
-        if (cls && !cls.instantiable && !lastArgs) {
+        if (cls && !cls.instantiable && !lastArgs && !lastRaw) {
+          log(`类 ${cls.name} 需要构造参数，推送参数表单`);
           sender.post({ type: 'form', model: msg.model, classes });
           return;
         }
@@ -535,17 +612,12 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
         return;
       }
       try {
-        const data = await exportOnce(currentModel!, lastInput, lastArgs);
+        const data = await exportOnce(currentModel!, lastInput, lastArgs, lastRaw);
         if (data) sender.post({ type: 'data', data });
       } catch (e) {
         fail(e);
       }
     });
-    LOG_WEB = text => {
-      try {
-        sender.post({ type: 'log', text });
-      } catch {}
-    };
     log(`打开预览: ${script}`);
     const notify = (text: string) => {
       log(text);
@@ -609,6 +681,10 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
           log(`已写入类清单缓存（${classes.length} 个类）`);
         }
 
+        // 类清单确定 → 立即渲染全部 tab（预选），导出结果随后推送
+        log(`nn.Module 类（${classes.length} 个）: ${classes.map(c => c.name).join(', ')}`);
+        sender.post({ type: 'tabs', classes });
+
         const outFile = path.join(tmpDir, 'graph.json');
         const attachMeta = (payload: any, model: string): any => {
           if (payload) {
@@ -625,17 +701,18 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
             .map(([k, v]) => `${k}=${v.trim()}`);
           return `${model}(${pairs.join(', ')})`;
         };
-        // 单次导出：input 形状可选；需要构造参数的类用表单值拼 --build 表达式；结果写缓存
-        exportOnce = async (model: string, input?: string, args?: Record<string, string>): Promise<any> => {
-          const gKey = cacheKey(['graph', script, model, input || '', buildExpr(model, args) || '']);
+        // 单次导出：input 形状可选；需要构造参数的类用表单值拼 --build 表达式
+        //（签名解析失败时 raw 为用户自由填写的参数串）；结果写缓存
+        exportOnce = async (model: string, input?: string, args?: Record<string, string>, raw?: string): Promise<any> => {
+          const expr0 = raw ? `${model}(${raw})` : buildExpr(model, args);
+          const gKey = cacheKey(['graph', script, model, input || '', expr0 || '']);
           const cachedGraph = readCache(context, gKey);
           if (cacheFresh(cachedGraph, fileMtime) && cachedGraph.payload) {
             return attachMeta(cachedGraph.payload, model);
           }
           notify(`正在导出 ${model}…`);
           const args0 = [exporter, '--file', script, '--model', model];
-          const expr = buildExpr(model, args);
-          if (expr) args0.push('--build', expr);
+          if (expr0) args0.push('--build', expr0);
           if (input) args0.push('--input', input);
           const payload = await runExport(out, pyList, [...args0, '--out', outFile], outFile, 180000, scriptDir, context, script);
           writeCache(context, gKey, { v: CACHE_VERSION, mtime: fileMtime, payload });
@@ -643,11 +720,12 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
           return attachMeta(payload, model);
         };
 
-        // 4) 默认导出第一个可直接实例化的类；需要构造参数的类推送表单；不询问输入形状（在预览界面输入，避免弹窗打断）
+        // 4) tab 窗口已提前创建好（见上方 type: 'tabs'），此处自动渲染默认 tab：
+        //    优先选可直接实例化的类立即导出；需要构造参数的类不阻塞，等用户点 tab 时再弹表单
         const def = classes.find(c => c.instantiable) || classes[0];
         currentModel = def.name;
         if (!def.instantiable) {
-          log(`默认类 ${def.name} 需要构造参数，推送参数表单`);
+          // 全部类都需要构造参数：自动弹出第一个类的参数表单，无需用户额外操作
           sender.post({ type: 'form', model: def.name, classes });
           return;
         }
@@ -690,8 +768,7 @@ function openViewer(
 <link rel="stylesheet" href="${cssUri}">
 </head>
 <body>
-<div id="tv-loading"><div class="spinner"></div><div class="tv-loading-text">正在准备…</div></div>
-<div id="model-tabs" style="display:none"></div>
+<div id="model-tabs"></div>
 <div id="main">
   <div id="tree-panel"></div>
   <div id="tree-splitter" title="拖拽调整宽度"></div>
@@ -703,6 +780,7 @@ function openViewer(
       </defs>
       <g id="viewport"><g id="panels"></g><g id="nodes"></g><g id="edges"></g></g>
     </svg>
+    <div id="tv-loading"><div class="spinner"></div><div class="tv-loading-text">正在准备…</div></div>
   </div>
   <div id="details"></div>
 </div>

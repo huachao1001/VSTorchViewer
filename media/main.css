@@ -62,7 +62,7 @@ body {
 
 /* ---------- 加载遮罩 ---------- */
 #tv-loading {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 90;
   display: flex;
@@ -108,24 +108,8 @@ body {
 }
 #tv-loading .tv-form .f-apply:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.15)); }
 #tv-loading .tv-form .f-hint { opacity: .55; font-size: 11px; text-align: center; }
-/* 遮罩内实时日志窗 */
-#tv-loading .tv-log-head { display: flex; align-items: center; gap: 8px; width: min(560px, 86%); opacity: .75; font-size: 11px; margin-top: 4px; }
-#tv-loading .tv-log-head span { flex: 1; text-align: center; opacity: .7; }
-#tv-loading .tv-log-open {
-  flex: none; padding: 2px 10px; cursor: pointer;
-  background: transparent; color: inherit;
-  border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
-  border-radius: 4px; font-size: 11px;
-}
-#tv-loading .tv-log-open:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.15)); }
-#tv-loading .tv-log {
-  width: min(560px, 86%); height: 168px; overflow: auto;
-  background: rgba(0,0,0,.25);
-  border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
-  border-radius: 4px; padding: 6px 8px;
-  font: 11px/1.5 Consolas, monospace;
-}
-#tv-loading .tv-log-line { white-space: pre-wrap; word-break: break-all; opacity: .85; }
+#tv-loading .tv-form .f-error { color: #e05565; font-size: 11px; text-align: center; word-break: break-all; }
+#tv-loading .tv-form .f-apply:disabled { opacity: .5; cursor: default; }
 
 /* ---------- 模块树面板 ---------- */
 .panel-title { font-weight: 600; opacity: .65; margin: 2px 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }

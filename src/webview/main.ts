@@ -97,22 +97,18 @@ if (splitter) {
 // 调试/测试钩子
 (window as unknown as { __tv?: unknown }).__tv = { model, view };
 
-// 加载遮罩：解析期间显示进度（转圈 + 文字）+ 实时运行日志，失败显示错误（点击关闭）
+// 加载遮罩：解析期间显示进度（转圈 + 文字），失败显示错误（点击关闭）
+// 日志不在这里展示：统一走 VS Code 输出面板（TorchViewer）
 // 扩展 HTML 里自带该节点；浏览器调试预览没有则动态创建
 let loadingEl: HTMLElement | undefined;
+// 表单模式：表单一旦显示就常驻，直到导出成功（data）才隐藏；出错/进度都不替换表单
+let formActive = false;
 function coreHtml(): string {
-  return '<div class="spinner"></div><div class="tv-loading-text"></div>'
-    + '<div class="tv-log-head"><span>运行日志</span><button class="tv-log-open">打开输出面板</button></div>'
-    + '<div class="tv-log"></div>';
+  return '<div class="spinner"></div><div class="tv-loading-text"></div>';
 }
 function ensureCore(el: HTMLElement): void {
-  // 核心结构缺失（如表单渲染覆盖过）→ 重建；日志按钮只绑一次
-  if (!el.querySelector('.tv-log')) el.insertAdjacentHTML('beforeend', coreHtml());
-  const btn = el.querySelector('.tv-log-open') as HTMLButtonElement | null;
-  if (btn && !btn.dataset.bound) {
-    btn.dataset.bound = '1';
-    btn.addEventListener('click', () => vscode.postMessage({ type: 'openLog' }));
-  }
+  // 核心结构缺失（如表单渲染覆盖过）→ 重建
+  if (!el.querySelector('.spinner')) el.insertAdjacentHTML('beforeend', coreHtml());
 }
 function ensureLoading(): HTMLElement {
   if (loadingEl) return loadingEl;
@@ -121,7 +117,8 @@ function ensureLoading(): HTMLElement {
     el = document.createElement('div');
     el.id = 'tv-loading';
     el.innerHTML = coreHtml();
-    document.body.appendChild(el);
+    // 遮罩只盖图形区（tab / 树 / 详情保持可见可点）
+    (document.getElementById('graph-area') || document.body).appendChild(el);
   }
   ensureCore(el);
   el.addEventListener('click', () => {
@@ -143,6 +140,7 @@ function hideProgress(): void {
 }
 function showLoadError(message: string): void {
   const el = ensureLoading();
+  formActive = false;
   el.classList.remove('form');
   el.classList.add('error');
   ensureCore(el);
@@ -150,20 +148,18 @@ function showLoadError(message: string): void {
   const t = el.querySelector('.tv-loading-text') as HTMLElement;
   if (t) t.textContent = `${message}（点击关闭）`;
 }
-// 实时日志：扩展侧推送的运行日志追加到遮罩内日志窗（保留最近 300 行，自动滚到底）
-function appendLog(text: string): void {
+// 表单填写期间出错（如导出失败）：错误提示显示在表单内，表单保留供修改重填，不关闭
+function showFormError(message: string): void {
   const el = ensureLoading();
-  ensureCore(el);
-  const pane = el.querySelector('.tv-log') as HTMLElement | null;
-  if (!pane) return;
-  const line = document.createElement('div');
-  line.className = 'tv-log-line';
-  line.textContent = text;
-  pane.appendChild(line);
-  while (pane.childElementCount > 300) pane.removeChild(pane.firstChild!);
-  pane.scrollTop = pane.scrollHeight;
+  const hint = el.querySelector('.f-error') as HTMLElement | null;
+  if (hint) hint.textContent = message;
+  const btn = el.querySelector('.f-apply') as HTMLButtonElement | null;
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '导出';
+  }
+  el.style.display = 'flex';
 }
-
 // 构造参数表单：需要传参的 nn.Module 逐参数输入（Python 字面量，默认值预填）
 function renderForm(model: string, classes: ClsInfo[]): void {
   const el = ensureLoading();
@@ -175,6 +171,21 @@ function renderForm(model: string, classes: ClsInfo[]): void {
   el.innerHTML = `<div class="tv-loading-text"><b>${esc(model)}</b> 构造参数</div><div class="tv-form"></div>`;
   const form = el.querySelector('.tv-form') as HTMLElement;
   const inputs = new Map<string, HTMLInputElement>();
+  // 签名解析失败（params 为空）时退化为单个自由输入框：用户直接填完整构造参数
+  let rawInput: HTMLInputElement | undefined;
+  if (!params.length) {
+    const row = document.createElement('div');
+    row.className = 'f-row';
+    const label = document.createElement('span');
+    label.className = 'f-label';
+    label.textContent = '构造参数';
+    rawInput = document.createElement('input');
+    rawInput.className = 'f-input';
+    rawInput.spellcheck = false;
+    rawInput.placeholder = '如 32 或 channels=32, kernel_size=3';
+    row.append(label, rawInput);
+    form.appendChild(row);
+  }
   for (const p of params) {
     const row = document.createElement('div');
     row.className = 'f-row';
@@ -195,13 +206,29 @@ function renderForm(model: string, classes: ClsInfo[]): void {
   applyRow.className = 'f-actions';
   const btn = document.createElement('button');
   btn.className = 'f-apply';
-  btn.textContent = params.length ? '导出' : '直接导出';
+  btn.textContent = '导出';
   const hint = document.createElement('div');
   hint.className = 'f-hint';
   hint.textContent = '值为 Python 字面量：数字直接写，字符串带引号（如 \'imagenet\'），列表如 [3, 4]';
+  const err = document.createElement('div');
+  err.className = 'f-error';
   applyRow.append(btn);
-  form.append(applyRow, hint);
+  form.append(applyRow, hint, err);
+  formActive = true;
   const submit = () => {
+    if (rawInput) {
+      rawInput.classList.remove('missing');
+      const v = rawInput.value.trim();
+      if (!v) {
+        rawInput.classList.add('missing');
+        return;
+      }
+      err.textContent = '';
+      btn.disabled = true;
+      btn.textContent = '导出中…';
+      vscode.postMessage({ type: 'export', model, raw: v });
+      return;
+    }
     const args: Record<string, string> = {};
     let bad = false;
     for (const [name, input] of inputs) {
@@ -216,13 +243,16 @@ function renderForm(model: string, classes: ClsInfo[]): void {
       if (v) args[name] = v;
     }
     if (bad) return;
+    err.textContent = '';
+    btn.disabled = true;
+    btn.textContent = '导出中…';
     vscode.postMessage({ type: 'export', model, args });
   };
   btn.addEventListener('click', submit);
   form.addEventListener('keydown', e => {
     if (e.key === 'Enter') submit();
   });
-  const first = inputs.values().next().value as HTMLInputElement | undefined;
+  const first = rawInput || (inputs.values().next().value as HTMLInputElement | undefined);
   first?.focus();
 }
 
@@ -240,18 +270,21 @@ window.addEventListener('message', e => {
   }
   const m2 = m;
   if (m2.type === 'data' && m2.data) {
+    formActive = false;
     hideProgress();
     view.onData(m2.data as GraphData);
     renderTabs(m2.data.classes, m2.data.model);
   } else if (m2.type === 'progress') {
-    showProgress(String(m2.text || '正在解析…'));
+    // 表单填写期间忽略进度消息，保持表单原样（表单提交后按钮已是"导出中…"）
+    if (!formActive) showProgress(String(m2.text || '正在解析…'));
   } else if (m2.type === 'error') {
-    showLoadError(String(m2.message || '解析失败'));
+    if (formActive) showFormError(String(m2.message || '解析失败'));
+    else showLoadError(String(m2.message || '解析失败'));
+  } else if (m2.type === 'tabs') {
+    renderTabs(m2.classes, m2.model);
   } else if (m2.type === 'form' && m2.model) {
     renderTabs(m2.classes, m2.model);
     renderForm(String(m2.model), m2.classes || []);
-  } else if (m2.type === 'log') {
-    appendLog(String(m2.text || ''));
   }
 });
 
