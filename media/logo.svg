@@ -2,25 +2,25 @@
   <title>TorchViewer Logo</title>
   <desc>两条独立绘制的鱼形模块以 180° 旋转对称互相缠绕：紫色与绿色阴阳相生，鱼眼分别内置代码符号与网络拓扑，寓意代码（模型）与可视化互相依存、互为表里。</desc>
 
-  <!-- 绿色鱼：头部在下（r44 正圆西弧），身体沿 R94 外弧东行，尾部以 r3 圆角收出尖尾 -->
-  <path d="M 128 222
-           A 44 44 0 1 1 128 134
-           A 56 56 0 0 0 179.6 56.2
-           A 3 3 0 0 1 184.1 52.6
-           A 94 94 0 0 1 128 222 Z"
-        fill="#00D4C0"/>
+   <!-- 绿色鱼：头部在下（r44 正圆西弧），身体沿 R94 外弧东行，尾部以 r3 圆角收出尖尾 -->
+   <path d="M 128 222
+            A 44 44 0 1 1 128 134
+            A 56 56 0 0 0 179.6 56.2
+            A 3 3 0 0 1 184.1 52.6
+            A 94 94 0 0 1 128 222 Z"
+         fill="#00D4C0" stroke="#1E1E2E" stroke-width="5" stroke-linejoin="round"/>
 
-  <!-- 紫色鱼：与绿鱼 180° 旋转对称 -->
-  <path d="M 128 34
-           A 44 44 0 1 1 128 122
-           A 56 56 0 0 0 76.4 199.8
-           A 3 3 0 0 1 71.9 203.4
-           A 94 94 0 0 1 128 34 Z"
-        fill="#7C4DFF"/>
+   <!-- 紫色鱼：与绿鱼 180° 旋转对称 -->
+   <path d="M 128 34
+            A 44 44 0 1 1 128 122
+            A 56 56 0 0 0 76.4 199.8
+            A 3 3 0 0 1 71.9 203.4
+            A 94 94 0 0 1 128 34 Z"
+         fill="#7C4DFF" stroke="#1E1E2E" stroke-width="5" stroke-linejoin="round"/>
 
-  <!-- 鱼眼：互为反色的小圆底，内置简笔图案 -->
-  <circle cx="128" cy="78" r="24" fill="#00D4C0"/>
-  <circle cx="128" cy="178" r="24" fill="#7C4DFF"/>
+   <!-- 鱼眼：互为反色的小圆底，内置简笔图案 -->
+   <circle cx="128" cy="78" r="24" fill="#00D4C0" stroke="#1E1E2E" stroke-width="5"/>
+   <circle cx="128" cy="178" r="24" fill="#7C4DFF" stroke="#1E1E2E" stroke-width="5"/>
 
   <!-- 上鱼眼：代码符号 </> -->
   <g fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
