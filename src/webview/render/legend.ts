@@ -3,6 +3,7 @@ import type { GNode } from '../types';
 import { esc } from '../utils';
 import { CATS, nodeColor } from '../categories';
 import { isIO } from '../node-metrics';
+import { t } from '../i18n';
 
 export function renderLegend(nodes: GNode[], area: HTMLElement): void {
   // 图例按会话（area）隔离：每个 tab 会话有自己的图例，不能跨会话用 document.getElementById 共享
@@ -13,7 +14,7 @@ export function renderLegend(nodes: GNode[], area: HTMLElement): void {
     area.appendChild(leg);
   }
   const used = new Map<string, string>();
-  if (nodes.some(nd => isIO(nd))) used.set('输入/输出', '#43a047');
+  if (nodes.some(nd => isIO(nd))) used.set(t('Input/Output', '输入/输出'), '#43a047');
   for (const nd of nodes) {
     if (nd.virtual || isIO(nd)) continue;
     const c = nodeColor(nd);

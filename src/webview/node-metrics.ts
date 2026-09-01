@@ -2,6 +2,7 @@
 import type { GNode } from './types';
 import { clamp, fmtNum, fmtShape, textW } from './utils';
 import { FONT_NAME, FONT_SHAPE, FONT_SUMMARY, FONT_TYPE } from './utils';
+import { t } from './i18n';
 
 export function isIO(nd: GNode): boolean {
   return nd.kind === 'placeholder' || nd.kind === 'output';
@@ -14,7 +15,7 @@ export function shapeStr(nd: GNode): string | undefined {
 
 export function sizeNode(nd: GNode): void {
   if (isIO(nd)) {
-    const head = nd.kind === 'placeholder' ? '输入 · ' : '输出 · ';
+    const head = nd.kind === 'placeholder' ? t('Input · ', '输入 · ') : t('Output · ', '输出 · ');
     const shp = shapeStr(nd);
     const label = head + '「' + (nd.name || '') + '」';
     const w = Math.max(textW(label, FONT_NAME), shp ? textW(shp, FONT_SHAPE) : 0);

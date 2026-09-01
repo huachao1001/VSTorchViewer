@@ -1,7 +1,7 @@
 {
   "name": "torchviewer",
-  "displayName": "TorchViewer",
-  "description": "像 Netron 一样可视化 PyTorch nn.Module 结构",
+  "displayName": "%ext.displayName%",
+  "description": "%ext.description%",
   "version": "0.1.0",
   "publisher": "local",
   "license": "MIT",
@@ -21,11 +21,11 @@
     "commands": [
       {
         "command": "torchviewer.visualize",
-        "title": "TorchViewer: Visualize Model"
+        "title": "%cmd.visualize.title%"
       },
       {
         "command": "torchviewer.visualizeFile",
-        "title": "TorchViewer: Visualize This Model",
+        "title": "%cmd.visualizeFile.title%",
         "icon": "$(circuit-board)"
       }
     ],
@@ -39,8 +39,7 @@
       ],
       "explorer/context": [
         {
-          "command": "torchviewer.visualizeFile",
-          "when": "resourceExtname == .py"
+          "command": "torchviewer.visualizeFile"
         }
       ]
     },
@@ -50,7 +49,7 @@
         "torchviewer.pythonPath": {
           "type": "string",
           "default": "python",
-          "description": "用于导出模型结构的 Python 解释器（需已安装 torch）"
+          "description": "%config.pythonPath.description%"
         },
         "torchviewer.defaultInputShape": {
           "type": "array",
@@ -63,7 +62,7 @@
             224,
             224
           ],
-          "description": "默认输入张量形状"
+          "description": "%config.defaultInputShape.description%"
         }
       }
     }

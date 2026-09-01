@@ -3,6 +3,7 @@
 import type { GNode, GraphData } from '../types';
 import { esc, fmtNum, fmtShape } from '../utils';
 import { nodeColor } from '../categories';
+import { t } from '../i18n';
 
 export interface DetailsHooks {
   applyShape?: (shape: string) => void;
@@ -34,7 +35,7 @@ export class DetailsPanel {
     shapeRow.className = 'shape-row';
     this.shapeInput = document.createElement('input');
     this.shapeInput.className = 'shape-input';
-    this.shapeInput.placeholder = '输入形状，如 1,3,224,224;1,10';
+    this.shapeInput.placeholder = t('Input shape, e.g. 1,3,224,224;1,10', '输入形状，如 1,3,224,224;1,10');
     this.shapeInput.spellcheck = false;
     const apply = () => {
       const v = this.shapeInput.value.trim();
@@ -42,7 +43,7 @@ export class DetailsPanel {
     };
     const btn = document.createElement('button');
     btn.className = 'shape-apply';
-    btn.textContent = '应用';
+    btn.textContent = t('Apply', '应用');
     btn.addEventListener('click', apply);
     this.shapeInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') apply();
@@ -81,14 +82,14 @@ export class DetailsPanel {
     const shp = nd.out_shape ?? nd.shape;
     const rows: string[] = [];
     const row = (k: string, v: string) => rows.push(`<tr><th>${k}</th><td>${esc(v)}</td></tr>`);
-    row('名称', nd.name || '-');
-    row('类别', nd.cls || nd.kind || '-');
-    if (nd.kind === 'call_module') row('模块路径', nd.target || nd.name);
-    if (nd.group) row('所属模块', nd.group + (nd.group_cls ? `（${nd.group_cls}）` : ''));
-    if (nd.summary) row('内容', nd.summary);
-    if (shp && shp.length) row('输出形状', fmtShape(shp));
-    if (nd.dtype) row('数据类型', nd.dtype.replace('torch.', ''));
-    if (nd.params !== undefined) row('参数量', `${fmtNum(nd.params)} (${nd.params.toLocaleString()})`);
+    row(t('Name', '名称'), nd.name || '-');
+    row(t('Kind', '类别'), nd.cls || nd.kind || '-');
+    if (nd.kind === 'call_module') row(t('Module Path', '模块路径'), nd.target || nd.name);
+    if (nd.group) row(t('Parent Module', '所属模块'), nd.group + (nd.group_cls ? t(` (${nd.group_cls})`, `（${nd.group_cls}）`) : ''));
+    if (nd.summary) row(t('Contents', '内容'), nd.summary);
+    if (shp && shp.length) row(t('Output Shape', '输出形状'), fmtShape(shp));
+    if (nd.dtype) row(t('Data Type', '数据类型'), nd.dtype.replace('torch.', ''));
+    if (nd.params !== undefined) row(t('Params', '参数量'), `${fmtNum(nd.params)} (${nd.params.toLocaleString()})`);
     if (nd.macs) row('MACs', `${fmtNum(nd.macs)} (${nd.macs.toLocaleString()})`);
     let attrs = '';
     if (nd.attrs) {
@@ -96,9 +97,9 @@ export class DetailsPanel {
         attrs += `<tr><th>${esc(k)}</th><td>${esc(typeof v === 'string' ? v : JSON.stringify(v))}</td></tr>`;
       }
     }
-    this.body.innerHTML = `<h3><span class="dot" style="background:${nodeColor(nd)}"></span>${esc(nd.cls || nd.kind || '节点')}</h3>
+    this.body.innerHTML = `<h3><span class="dot" style="background:${nodeColor(nd)}"></span>${esc(nd.cls || nd.kind || t('Node', '节点'))}</h3>
 <table class="kv">${rows.join('')}</table>
-${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
+${attrs ? `<h4>${t('Attributes', '属性')}</h4><table class="kv">${attrs}</table>` : ''}`;
   }
 
   // 已被用户关闭的警告（按 data 对象记忆；重新导出产生新 data → 警告重新出现）
@@ -108,9 +109,9 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
     this.rebuildArgs(data);
     let html = '';
     if (data?.warning && !this.dismissed.has(data)) {
-      html += `<div class="warn"><button class="warn-close" title="关闭">×</button><span>${esc(data.warning)}</span></div>`;
+      html += `<div class="warn"><button class="warn-close" title="${t('Close', '关闭')}">×</button><span>${esc(data.warning)}</span></div>`;
     }
-    html += `<div class="hint">滚轮缩放 · 拖拽平移 · 点击节点查看详情</div>`;
+    html += `<div class="hint">${t('Scroll to zoom · Drag to pan · Click a node for details', '滚轮缩放 · 拖拽平移 · 点击节点查看详情')}</div>`;
     this.body.innerHTML = html;
     this.body.querySelector('.warn-close')?.addEventListener('click', () => {
       if (data) this.dismissed.add(data);
@@ -121,17 +122,17 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
   // 底部固定摘要：输入/输出形状、参数量、MACs、FLOPs
   private showSummary(data: GraphData | null): void {
     if (!data || (data.total_params === undefined && !data.total_macs && !data.inputs?.length && !data.outputs?.length)) {
-      this.summaryEl.innerHTML = '<div class="s-hint">输入形状后计算各节点形状与 MACs/FLOPs</div>';
+      this.summaryEl.innerHTML = `<div class="s-hint">${t('Enter an input shape to compute node shapes and MACs/FLOPs', '输入形状后计算各节点形状与 MACs/FLOPs')}</div>`;
       return;
     }
     const row = (k: string, v: string) => `<div class="s-row"><span class="s-k">${k}</span><span class="s-v">${v}</span></div>`;
     const num = (n: number) => `${fmtNum(n)} <i>(${n.toLocaleString()})</i>`;
     let html = '';
     if (data.inputs?.length)
-      html += row('输入', data.inputs.map(i => `${esc(i.name || 'x')} ${esc(fmtShape(i.shape))}`).join('<br>'));
+      html += row(t('Inputs', '输入'), data.inputs.map(i => `${esc(i.name || 'x')} ${esc(fmtShape(i.shape))}`).join('<br>'));
     if (data.outputs?.length)
-      html += row('输出', data.outputs.map(i => `${esc(i.name || 'y')}${i.shape ? ' ' + esc(fmtShape(i.shape)) : ''}`).join('<br>'));
-    if (data.total_params !== undefined) html += row('参数量', num(data.total_params));
+      html += row(t('Outputs', '输出'), data.outputs.map(i => `${esc(i.name || 'y')}${i.shape ? ' ' + esc(fmtShape(i.shape)) : ''}`).join('<br>'));
+    if (data.total_params !== undefined) html += row(t('Params', '参数量'), num(data.total_params));
     if (data.total_macs) html += row('MACs', num(data.total_macs));
     if (data.total_flops) html += row('FLOPs', num(data.total_flops));
     this.summaryEl.innerHTML = html;
@@ -159,7 +160,7 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
     this.argsEl.innerHTML = '';
     const title = document.createElement('div');
     title.className = 'args-title';
-    title.textContent = '构造参数 · 可修改后重新导出';
+    title.textContent = t('Constructor args · edit and re-export', '构造参数 · 可修改后重新导出');
     const form = document.createElement('div');
     form.className = 'tv-form';
     const inputs = new Map<string, HTMLInputElement>();
@@ -169,12 +170,12 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
       const label = document.createElement('span');
       label.className = 'f-label';
       label.textContent = p.name + (p.annotation ? ` : ${p.annotation}` : '');
-      label.title = p.required ? '必填' : '可选';
+      label.title = p.required ? t('required', '必填') : t('optional', '可选');
       const input = document.createElement('input');
       input.className = 'f-input';
       input.spellcheck = false;
       input.value = submitted[p.name] ?? p.default ?? '';
-      input.placeholder = p.required ? '必填，Python 字面量' : '留空用默认值';
+      input.placeholder = p.required ? t('Required, Python literal', '必填，Python 字面量') : t('Leave empty for default', '留空用默认值');
       inputs.set(p.name, input);
       row.append(label, input);
       form.appendChild(row);
@@ -183,7 +184,7 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
     actions.className = 'f-actions';
     const btn = document.createElement('button');
     btn.className = 'f-apply';
-    btn.textContent = '重新导出';
+    btn.textContent = t('Re-export', '重新导出');
     btn.addEventListener('click', () => {
       const out: Record<string, string> = {};
       let bad = false;
@@ -199,7 +200,7 @@ ${attrs ? `<h4>属性</h4><table class="kv">${attrs}</table>` : ''}`;
       }
       if (bad) return;
       btn.disabled = true;
-      btn.textContent = '导出中…';
+      btn.textContent = t('Exporting…', '导出中…');
       this.hooks?.submitArgs?.(model, out);
     });
     actions.appendChild(btn);

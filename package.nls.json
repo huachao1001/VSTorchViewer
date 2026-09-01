@@ -1,0 +1,8 @@
+{
+  "ext.displayName": "TorchViewer",
+  "ext.description": "Visualize PyTorch nn.Module structure like Netron",
+  "cmd.visualize.title": "TorchViewer: Visualize Model",
+  "cmd.visualizeFile.title": "TorchViewer: Visualize This Model",
+  "config.pythonPath.description": "Python interpreter used to export model structure (torch required)",
+  "config.defaultInputShape.description": "Default input tensor shape"
+}

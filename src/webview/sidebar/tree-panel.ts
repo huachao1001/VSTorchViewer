@@ -1,6 +1,7 @@
 // TreePanel：左侧模块结构树（渲染全局模块树 MNode——与拓扑图同一结构源，支持关键字筛选）
 import type { GNode, MNode } from '../types';
 import { esc, fmtNum, fmtShape } from '../utils';
+import { t } from '../i18n';
 
 export class TreePanel {
   private root: MNode | null = null;
@@ -19,7 +20,7 @@ export class TreePanel {
     const input = document.createElement('input');
     this.input = input;
     input.className = 'tree-search';
-    input.placeholder = '搜索筛选节点...';
+    input.placeholder = t('Filter nodes...', '搜索筛选节点...');
     input.spellcheck = false;
     input.addEventListener('input', () => {
       this.filter = input.value.trim().toLowerCase();
@@ -56,14 +57,14 @@ export class TreePanel {
 
   // 按当前关键字重建树；命中的祖先链自动展开
   private renderTree(): void {
-    this.content.innerHTML = '<div class="panel-title">模块结构</div>';
+    this.content.innerHTML = `<div class="panel-title">${t('Module Structure', '模块结构')}</div>`;
     if (!this.root) return;
     const el = this.item(this.root, true);
     if (el) this.content.appendChild(el);
     if (this.filter && !this.content.querySelector('.tree-item, .tree-leaf')) {
       const empty = document.createElement('div');
       empty.className = 'tree-empty';
-      empty.textContent = '无匹配节点';
+      empty.textContent = t('No matching nodes', '无匹配节点');
       this.content.appendChild(empty);
     }
   }

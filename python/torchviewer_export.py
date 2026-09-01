@@ -22,6 +22,14 @@ import traceback
 
 _ID = itertools.count()
 
+# 界面语言：由扩展通过 --lang 传入（zh/en），错误与警告文案随之切换
+_LANG = "en"
+
+
+def T(en, zh):
+    """按当前语言返回文案：T('English', '中文')"""
+    return zh if _LANG.startswith("zh") else en
+
 
 def _write(path, obj):
     with open(path, "w", encoding="utf-8") as f:
@@ -73,7 +81,7 @@ def import_from_file(path):
             sys.path.insert(0, p)
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"无法加载文件: {path}")
+        raise RuntimeError(T(f"Cannot load file: {path}", f"无法加载文件: {path}"))
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
@@ -139,9 +147,9 @@ def build_model(mod, cls_name, expr, args_json=""):
         try:
             raw = json.loads(args_json)
         except Exception as e:
-            raise RuntimeError(f"--args 不是合法 JSON：{e}")
+            raise RuntimeError(T(f"--args is not valid JSON: {e}", f"--args 不是合法 JSON：{e}"))
         if not isinstance(raw, dict):
-            raise RuntimeError("--args 必须是 JSON 对象（参数名 → 值 的字典）")
+            raise RuntimeError(T("--args must be a JSON object (dict of arg name → value)", "--args 必须是 JSON 对象（参数名 → 值 的字典）"))
         kwargs = {}
         for k, v in raw.items():
             if isinstance(v, str):
@@ -155,12 +163,17 @@ def build_model(mod, cls_name, expr, args_json=""):
     if expr:
         model = eval(expr, vars(mod))
         if not isinstance(model, nn.Module):
-            raise RuntimeError(f"{expr} 不是 nn.Module")
+            raise RuntimeError(T(f"{expr} is not an nn.Module", f"{expr} 不是 nn.Module"))
         return model
     try:
         return cls()
     except TypeError as e:
-        raise RuntimeError(f"无法实例化 {cls_name}()（{e}）。可用 --build \"Model(args...)\" 传入构造参数。")
+        raise RuntimeError(
+            T(
+                f"Cannot instantiate {cls_name}() ({e}). Pass constructor args via --build \"Model(args...)\".",
+                f"无法实例化 {cls_name}()（{e}）。可用 --build \"Model(args...)\" 传入构造参数。",
+            )
+        )
 
 
 def count_params(m):
@@ -502,7 +515,10 @@ def export_graph(model, input_shapes, model_name):
             "model": model_name,
             "root": build_tree(model, model_name),
             "total_params": count_params(model),
-            "warning": f"符号追踪失败，已回退为模块树视图：{te}",
+            "warning": T(
+                f"Symbolic trace failed, fell back to module tree view: {te}",
+                f"符号追踪失败，已回退为模块树视图：{te}",
+            ),
         }
 
     # 未提供输入形状时跳过形状传播（节点无 out_shape，MACs/FLOPs 不计算）
@@ -605,7 +621,7 @@ def export_graph(model, input_shapes, model_name):
         "total_flops": total_macs * 2,
     }
     if errors:
-        data["warning"] = "部分形状推断失败：" + "；".join(errors[:2])
+        data["warning"] = T("Some shape inference failed: ", "部分形状推断失败：") + T("; ", "；").join(errors[:2])
     return data
 
 
@@ -648,26 +664,32 @@ def parse_input(s):
             continue
         dims = [int(x) for x in part.replace(" ", "").split(",") if x != ""]
         if not dims:
-            raise RuntimeError(f"无效的输入形状: {part}")
+            raise RuntimeError(T(f"Invalid input shape: {part}", f"无效的输入形状: {part}"))
         shapes.append(dims)
     return shapes or [[1, 3, 224, 224]]
 
 
 def main():
-    ap = argparse.ArgumentParser(description="TorchViewer 导出器")
-    ap.add_argument("--file", help="目标 .py 文件")
-    ap.add_argument("--model", help="nn.Module 类名")
-    ap.add_argument("--build", help='构造表达式，如 "Model(num_classes=10)"')
-    ap.add_argument("--args", default="", help='构造参数 JSON 字典，如 \'{"channels": 8}\'（推荐，cls(**args) 字典方式实例化）')
-    ap.add_argument("--input", default="", help="输入形状，多输入用 ; 分隔；留空则不计算形状")
-    ap.add_argument("--list", action="store_true", help="列出候选模型类")
-    ap.add_argument("--out", required=True, help="输出 JSON 路径")
+    ap = argparse.ArgumentParser(description="TorchViewer exporter")
+    ap.add_argument("--file", help=T("Target .py file", "目标 .py 文件"))
+    ap.add_argument("--model", help=T("nn.Module class name", "nn.Module 类名"))
+    ap.add_argument("--build", help=T('Constructor expression, e.g. "Model(num_classes=10)"', '构造表达式，如 "Model(num_classes=10)"'))
+    ap.add_argument("--args", default="", help=T(
+        'Constructor args as a JSON dict, e.g. \'{"channels": 8}\' (recommended, instantiated via cls(**args))',
+        '构造参数 JSON 字典，如 \'{"channels": 8}\'（推荐，cls(**args) 字典方式实例化）'
+    ))
+    ap.add_argument("--input", default="", help=T("Input shape(s), multiple inputs separated by ;; leave empty to skip shapes", "输入形状，多输入用 ; 分隔；留空则不计算形状"))
+    ap.add_argument("--list", action="store_true", help=T("List candidate model classes", "列出候选模型类"))
+    ap.add_argument("--out", required=True, help=T("Output JSON path", "输出 JSON 路径"))
+    ap.add_argument("--lang", default="en", help=T("UI language for messages (en/zh)", "提示信息语言（en/zh）"))
     a = ap.parse_args()
+    global _LANG
+    _LANG = a.lang
 
     try:
         if a.list:
             if not a.file:
-                raise RuntimeError("--list 需要 --file")
+                raise RuntimeError(T("--list requires --file", "--list 需要 --file"))
             mod = import_from_file(a.file)
             classes = find_module_classes(mod)
             infos = []
@@ -688,21 +710,29 @@ def main():
             mod = import_from_file(a.file)
             classes = find_module_classes(mod)
             if not classes:
-                raise RuntimeError("文件中未找到 nn.Module 子类")
+                raise RuntimeError(T("No nn.Module subclass found in the file", "文件中未找到 nn.Module 子类"))
             if a.model and a.model not in classes:
-                raise RuntimeError(f"{a.model} 不是该文件中定义的 nn.Module 子类（候选：{'、'.join(classes)}）")
+                raise RuntimeError(
+                    T(
+                        f"{a.model} is not an nn.Module subclass defined in this file (candidates: {', '.join(classes)})",
+                        f"{a.model} 不是该文件中定义的 nn.Module 子类（候选：{'、'.join(classes)}）",
+                    )
+                )
             model_name = a.model or classes[0]
             model = build_model(mod, model_name, a.build, a.args)
             data = export_graph(model, parse_input(a.input) if a.input.strip() else None, model_name)
             _write(a.out, data)
             sys.exit(0)
-        raise RuntimeError("请指定 --file")
+        raise RuntimeError(T("Please specify --file", "请指定 --file"))
     except SystemExit:
         raise
     except Exception as e:
         msg = str(e)
         if "No module named" in msg and "torch" in msg:
-            msg = f"未找到 torch，请在所选 Python 环境安装：pip install torch（{msg}）"
+            msg = T(
+                f"torch not found. Install it in the selected Python environment: pip install torch ({msg})",
+                f"未找到 torch，请在所选 Python 环境安装：pip install torch（{msg}）",
+            )
         _write(a.out, {"ok": False, "error": msg, "traceback": traceback.format_exc()})
         sys.exit(1)
 

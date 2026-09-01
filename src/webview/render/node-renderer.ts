@@ -3,6 +3,7 @@ import type { GNode } from '../types';
 import { el, fmtNum, FONT_NAME, FONT_SHAPE, FONT_SUMMARY, FONT_TYPE, textW, truncate } from '../utils';
 import { nodeColor } from '../categories';
 import { isIO, shapeStr } from '../node-metrics';
+import { t as tr } from '../i18n';
 
 export class NodeRenderer {
   build(nd: GNode): SVGGElement {
@@ -23,7 +24,7 @@ export class NodeRenderer {
 
   // 输入/输出：药丸形 + 内嵌虚线框（引文双线效果），名称加「」引用号
   private buildIO(g: SVGGElement, nd: GNode, color: string): SVGGElement {
-    const head = nd.kind === 'placeholder' ? '输入 · ' : '输出 · ';
+    const head = nd.kind === 'placeholder' ? tr('Input · ', '输入 · ') : tr('Output · ', '输出 · ');
     g.appendChild(
       el('rect', {
         width: nd.w!.toFixed(1),

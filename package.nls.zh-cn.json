@@ -1,0 +1,8 @@
+{
+  "ext.displayName": "TorchViewer",
+  "ext.description": "像 Netron 一样可视化 PyTorch nn.Module 结构",
+  "cmd.visualize.title": "TorchViewer: 可视化模型",
+  "cmd.visualizeFile.title": "TorchViewer: 可视化此模型",
+  "config.pythonPath.description": "用于导出模型结构的 Python 解释器（需已安装 torch）",
+  "config.defaultInputShape.description": "默认输入张量形状"
+}

@@ -10,6 +10,7 @@ import { PanelRenderer } from '../render/panel-renderer';
 import { renderLegend } from '../render/legend';
 import { DetailsPanel } from '../sidebar/details-panel';
 import { TreePanel } from '../sidebar/tree-panel';
+import { t } from '../i18n';
 
 interface Containers {
   svg: SVGSVGElement;
@@ -62,7 +63,7 @@ export class GraphView {
     if (!data) {
       // 会话尚无数据（如参数表单态）：侧栏切到本会话的空状态，不残留其他模型的内容
       this.tree.clear();
-      this.details.showPlaceholder('填写构造参数并导出后，这里显示模型信息');
+      this.details.showPlaceholder(t('Fill in constructor args and export to see model info here', '填写构造参数并导出后，这里显示模型信息'));
       return;
     }
     this.tree.render(this.model.treeRoot);
@@ -174,7 +175,7 @@ export class GraphView {
       group: key,
       group_cls: p.clss[0],
       params: p.params,
-      summary: `${p.nodes.length} 个算子`,
+      summary: t(`${p.nodes.length} ops`, `${p.nodes.length} 个算子`),
       clusterKey: key,
     };
     this.sel = { id: -1, group: key, isCluster: true };

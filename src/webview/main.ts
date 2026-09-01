@@ -8,6 +8,7 @@ import { GraphModel } from './graph-model';
 import { GraphView } from './view/graph-view';
 import type { GraphData } from './types';
 import { esc } from './utils';
+import { t } from './i18n';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: unknown): void;
@@ -104,7 +105,7 @@ function renderTabs(classes: ClsInfo[] | undefined, current?: string): void {
     const b = document.createElement('button');
     b.className = 'tab' + (c.name === current ? ' active' : '');
     b.textContent = c.name;
-    if (!c.instantiable) b.title = '需要构造参数';
+    if (!c.instantiable) b.title = t('Requires constructor args', '需要构造参数');
     b.addEventListener('click', () => {
       lastExportModel = c.name;
       vscode.postMessage({ type: 'export', model: c.name });
@@ -217,7 +218,7 @@ function showFormError(message: string): void {
   const btn = layer.querySelector('.f-apply') as HTMLButtonElement | null;
   if (btn) {
     btn.disabled = false;
-    btn.textContent = '导出';
+    btn.textContent = t('Export', '导出');
   }
 }
 // 构造参数表单：需要传参的 nn.Module 逐参数输入（Python 字面量，默认值预填）
@@ -232,7 +233,7 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
   layer.style.display = 'flex';
   const cls = classes.find(c => c.name === model);
   const params = cls?.params || [];
-  layer.innerHTML = `<div class="tv-loading-text"><b>${esc(model)}</b> 构造参数</div><div class="tv-form"></div>`;
+  layer.innerHTML = `<div class="tv-loading-text"><b>${esc(model)}</b> ${t('Constructor Args', '构造参数')}</div><div class="tv-form"></div>`;
   const form = layer.querySelector('.tv-form') as HTMLElement;
   const inputs = new Map<string, HTMLInputElement>();
   // 签名解析失败（params 为空）时退化为单个自由输入框：用户直接填完整构造参数
@@ -242,11 +243,11 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
     row.className = 'f-row';
     const label = document.createElement('span');
     label.className = 'f-label';
-    label.textContent = '构造参数';
+    label.textContent = t('Constructor args', '构造参数');
     rawInput = document.createElement('input');
     rawInput.className = 'f-input';
     rawInput.spellcheck = false;
-    rawInput.placeholder = '参数字典：channels=8, kernel_size=3';
+    rawInput.placeholder = t('Arg dict: channels=8, kernel_size=3', '参数字典：channels=8, kernel_size=3');
     row.append(label, rawInput);
     form.appendChild(row);
   }
@@ -256,13 +257,13 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
     const label = document.createElement('span');
     label.className = 'f-label';
     label.textContent = p.name + (p.annotation ? ` : ${p.annotation}` : '');
-    label.title = p.required ? '必填' : '可选';
+    label.title = p.required ? t('required', '必填') : t('optional', '可选');
       const input = document.createElement('input');
       input.className = 'f-input';
       input.spellcheck = false;
       // 预填优先级：上次提交值 > 类默认值（尽量沿用上次填写）
       input.value = lastArgsByModel.get(model)?.[p.name] ?? p.default ?? '';
-      input.placeholder = p.required ? '必填，Python 字面量' : '留空用默认值';
+      input.placeholder = p.required ? t('Required, Python literal', '必填，Python 字面量') : t('Leave empty for default', '留空用默认值');
       inputs.set(p.name, input);
     row.append(label, input);
     form.appendChild(row);
@@ -271,10 +272,13 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
   applyRow.className = 'f-actions';
   const btn = document.createElement('button');
   btn.className = 'f-apply';
-  btn.textContent = '导出';
+  btn.textContent = t('Export', '导出');
   const hint = document.createElement('div');
   hint.className = 'f-hint';
-  hint.textContent = '值为 Python 字面量：数字直接写，字符串带引号（如 \'imagenet\'），列表如 [3, 4]';
+  hint.textContent = t(
+    "Values are Python literals: numbers as-is, strings quoted (e.g. 'imagenet'), lists like [3, 4]",
+    '值为 Python 字面量：数字直接写，字符串带引号（如 \'imagenet\'），列表如 [3, 4]'
+  );
   const err = document.createElement('div');
   err.className = 'f-error';
   applyRow.append(btn);
@@ -290,7 +294,7 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
       }
       err.textContent = '';
       btn.disabled = true;
-      btn.textContent = '导出中…';
+      btn.textContent = t('Exporting…', '导出中…');
       lastExportModel = model;
       vscode.postMessage({ type: 'export', model, raw: v });
       return;
@@ -311,7 +315,7 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
     if (bad) return;
     err.textContent = '';
     btn.disabled = true;
-    btn.textContent = '导出中…';
+    btn.textContent = t('Exporting…', '导出中…');
     lastArgsByModel.set(model, args);
     lastExportModel = model;
     vscode.postMessage({ type: 'export', model, args });
@@ -327,7 +331,13 @@ function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
 // 看门狗：长时间收不到扩展侧任何消息（data/progress/error/form）→ 给出可操作的提示，避免无限转圈
 let gotMessage = false;
 const watchdog = setTimeout(() => {
-  if (!gotMessage) showLoadError('扩展侧长时间无响应：请查看输出面板（TorchViewer）排查，或重新运行命令');
+  if (!gotMessage)
+    showLoadError(
+      t(
+        'No response from the extension for a long time: check the output panel (TorchViewer), or re-run the command',
+        '扩展侧长时间无响应：请查看输出面板（TorchViewer）排查，或重新运行命令'
+      )
+    );
 }, 20000);
 
 window.addEventListener('message', e => {
@@ -361,9 +371,9 @@ window.addEventListener('message', e => {
     renderTabs(data.classes, name);
   } else if (m2.type === 'progress') {
     // 表单填写期间忽略进度消息，保持表单原样（表单提交后按钮已是"导出中…"）
-    if (!formActive) showProgress(String(m2.text || '正在解析…'));
+    if (!formActive) showProgress(String(m2.text || t('Parsing…', '正在解析…')));
   } else if (m2.type === 'error') {
-    if (formActive) showFormError(String(m2.message || '解析失败'));
+    if (formActive) showFormError(String(m2.message || t('Parsing failed', '解析失败')));
     else {
       // 自动导出失败（如记忆参数与新输入不匹配）：该模型需要传参 → 重新拉起参数表单
       //（已有表单则原样恢复，保留用户编辑），错误内联显示在表单内；否则走全屏错误
@@ -374,8 +384,8 @@ window.addEventListener('message', e => {
         const s = getSession(lastExportModel);
         setActiveSession(s);
         renderForm(s, lastExportModel, lastClasses);
-        showFormError(String(m2.message || '解析失败'));
-      } else showLoadError(String(m2.message || '解析失败'));
+        showFormError(String(m2.message || t('Parsing failed', '解析失败')));
+      } else showLoadError(String(m2.message || t('Parsing failed', '解析失败')));
     }
   } else if (m2.type === 'tabs') {
     lastClasses = m2.classes || [];

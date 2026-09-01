@@ -5,6 +5,7 @@ import dagre from '@dagrejs/dagre';
 import type { Chain, GEdge, GNode, GraphData, MNode, Panel, Pt, ResolvedSelection, Selection } from './types';
 import { sizeNode } from './node-metrics';
 import { EdgeRouter } from './router/edge-router';
+import { t } from './i18n';
 
 // 缩放下限：保证卡片文字可读（12px→9.6px、10.5px→8.4px），禁止缩得更小
 export const K_MIN = 0.8;
@@ -293,7 +294,7 @@ export class GraphModel {
         params: c.params,
         group: c.key,
         group_cls: cls,
-        summary: `${c.members.length} 个算子`,
+        summary: t(`${c.members.length} ops`, `${c.members.length} 个算子`),
         out_shape: c.shape,
         clusterKey: c.key,
       };
