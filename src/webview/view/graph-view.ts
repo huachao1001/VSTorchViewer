@@ -51,9 +51,22 @@ export class GraphView {
     this.model.load(data, this.view.k);
     if (data.kind === 'tree') this.renderTreeMode();
     else this.renderGraph();
-    this.tree.render(data);
+    this.tree.render(this.model.treeRoot);
     this.details.show(null, data);
     setTimeout(() => this.fit(), 0);
+  }
+
+  // tab 切回（DOM 保留未重建）：刷新共享侧栏（树/详情）为本会话内容，并重新应用选中态
+  activate(): void {
+    const data = this.model.data;
+    if (!data) {
+      // 会话尚无数据（如参数表单态）：侧栏切到本会话的空状态，不残留其他模型的内容
+      this.tree.clear();
+      this.details.showPlaceholder('填写构造参数并导出后，这里显示模型信息');
+      return;
+    }
+    this.tree.render(this.model.treeRoot);
+    this.applySelection();
   }
 
   // ---------- 渲染 ----------

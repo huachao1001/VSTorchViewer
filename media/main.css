@@ -11,21 +11,28 @@ body {
 }
 
 /* ---------- 布局 ---------- */
-#model-tabs { flex: none; display: flex; justify-content: flex-end; gap: 4px; padding: 6px 10px 0; overflow-x: auto; }
+/* 模型 tab：按钮外观，选中态用主按钮色高亮 */
+#model-tabs { flex: none; display: flex; justify-content: flex-end; gap: 6px; padding: 8px 10px; overflow-x: auto; }
 #model-tabs .tab {
   border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
-  border-bottom: none;
-  background: transparent;
-  color: var(--vscode-editor-foreground, inherit);
-  border-radius: 6px 6px 0 0;
+  background: var(--vscode-button-secondaryBackground, rgba(128,128,128,.18));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground, inherit));
+  border-radius: 4px;
   padding: 4px 14px;
   cursor: pointer;
   font-size: 12px;
   font-family: Consolas, monospace;
-  opacity: .7;
+  opacity: .85;
+  white-space: nowrap;
 }
-#model-tabs .tab:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,.15)); }
-#model-tabs .tab.active { opacity: 1; background: var(--vscode-editorWidget-background, #252526); border-color: var(--vscode-focusBorder, #4a9eff); }
+#model-tabs .tab:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,.28)); }
+#model-tabs .tab.active {
+  opacity: 1;
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+  border-color: var(--vscode-button-background, #0e639c);
+  font-weight: 600;
+}
 #main { flex: 1; display: flex; min-height: 0; }
 #tree-panel { width: 250px; min-width: 150px; max-width: 70vw; overflow: auto; padding: 8px 6px; background: var(--vscode-sideBar-background, transparent); }
 /* 树面板滚动条：完全隐藏（保留滚轮/拖拽滚动能力） */
@@ -34,7 +41,10 @@ body {
 #tree-splitter { flex: none; width: 5px; cursor: col-resize; background: var(--vscode-panel-border, rgba(128,128,128,.3)); }
 #tree-splitter:hover, #tree-splitter.active { background: var(--vscode-focusBorder, #0078d4); }
 #graph-area { flex: 1; min-width: 0; position: relative; }
-#svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+#svg { width: 100%; height: 100%; display: block; }
+/* 每个 nn.Module tab 的独立会话容器（svg + 图例），切换 tab 只切换 display，DOM 保留 */
+#graph-area .session { position: absolute; inset: 0; }
+#graph-area .session svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
 #details { width: 300px; min-width: 220px; display: flex; flex-direction: column; border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); background: var(--vscode-sideBar-background, transparent); }
 .details-body { flex: 1 1 auto; overflow: auto; padding: 12px 14px; }
 #details-summary { flex: none; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); padding: 10px 14px; font-size: 12px; max-height: 40%; overflow: auto; }
@@ -80,36 +90,48 @@ body {
   border-top-color: var(--vscode-focusBorder, #4a9eff);
   animation: tv-spin .9s linear infinite;
 }
-#tv-loading .tv-loading-text { opacity: .7; font-size: 12px; max-width: 70%; text-align: center; word-break: break-all; }
+/* 构造参数表单（需要传参的 nn.Module）：全局遮罩与各 tab 会话的表单层共用一套样式 */
+:is(#tv-loading, .tv-form-layer) .tv-loading-text { opacity: .7; font-size: 12px; max-width: 70%; text-align: center; word-break: break-all; }
+:is(#tv-loading, .tv-form-layer) .tv-loading-text b { font-size: 13px; }
 #tv-loading.error .spinner { display: none; }
 #tv-loading.error { cursor: pointer; }
 @keyframes tv-spin { to { transform: rotate(360deg); } }
-/* 构造参数表单（需要传参的 nn.Module） */
 #tv-loading.form .spinner { display: none; }
-#tv-loading .tv-loading-text b { font-size: 13px; }
-#tv-loading .tv-form { display: flex; flex-direction: column; gap: 8px; width: min(460px, 82%); max-height: 64%; overflow: auto; }
-#tv-loading .tv-form .f-row { display: flex; align-items: center; gap: 8px; }
-#tv-loading .tv-form .f-label { flex: none; width: 42%; text-align: right; font-family: Consolas, monospace; font-size: 12px; word-break: break-all; opacity: .85; }
-#tv-loading .tv-form .f-input {
+/* 每个 tab 会话的表单层：属于会话容器，随 tab 整体切换 */
+.tv-form-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--vscode-editor-background, #1f1f1f);
+}
+:is(#tv-loading, .tv-form-layer) .tv-form { display: flex; flex-direction: column; gap: 8px; width: min(460px, 82%); max-height: 64%; overflow: auto; }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-row { display: flex; align-items: center; gap: 8px; }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-label { flex: none; width: 42%; text-align: right; font-family: Consolas, monospace; font-size: 12px; word-break: break-all; opacity: .85; }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-input {
   flex: 1; min-width: 0; padding: 3px 8px;
   background: var(--vscode-input-background, rgba(0,0,0,.2));
   color: var(--vscode-input-foreground, inherit);
   border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,.3)));
   border-radius: 4px; outline: none; font-size: 12px; font-family: Consolas, monospace;
 }
-#tv-loading .tv-form .f-input:focus { border-color: var(--vscode-focusBorder, #4a9eff); }
-#tv-loading .tv-form .f-input.missing { border-color: #e05565; }
-#tv-loading .tv-form .f-actions { display: flex; justify-content: center; }
-#tv-loading .tv-form .f-apply {
+:is(#tv-loading, .tv-form-layer) .tv-form .f-input:focus { border-color: var(--vscode-focusBorder, #4a9eff); }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-input.missing { border-color: #e05565; }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-actions { display: flex; justify-content: center; }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-apply {
   padding: 4px 18px; cursor: pointer;
   background: transparent; color: inherit;
   border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
   border-radius: 4px; font-size: 12px;
 }
-#tv-loading .tv-form .f-apply:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.15)); }
-#tv-loading .tv-form .f-hint { opacity: .55; font-size: 11px; text-align: center; }
-#tv-loading .tv-form .f-error { color: #e05565; font-size: 11px; text-align: center; word-break: break-all; }
-#tv-loading .tv-form .f-apply:disabled { opacity: .5; cursor: default; }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-apply:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.15)); }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-hint { opacity: .55; font-size: 11px; text-align: center; }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-error { color: #e05565; font-size: 11px; text-align: center; word-break: break-all; }
+:is(#tv-loading, .tv-form-layer) .tv-form .f-apply:disabled { opacity: .5; cursor: default; }
 
 /* ---------- 模块树面板 ---------- */
 .panel-title { font-weight: 600; opacity: .65; margin: 2px 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }

@@ -2,7 +2,7 @@
 // 职责：层级计算（语义缩放）、模块折叠、dagre 布局、背景盒空间后处理、组合背景几何、选中解析
 // 不接触 DOM；渲染层只读取它暴露的 nodes/idx/chains/panels
 import dagre from '@dagrejs/dagre';
-import type { Chain, GEdge, GNode, GraphData, Panel, Pt, ResolvedSelection, Selection } from './types';
+import type { Chain, GEdge, GNode, GraphData, MNode, Panel, Pt, ResolvedSelection, Selection } from './types';
 import { sizeNode } from './node-metrics';
 import { EdgeRouter } from './router/edge-router';
 
@@ -27,6 +27,13 @@ export class GraphModel {
   fullNodes: GNode[] = [];
   fullIdx = new Map<number, GNode>();
   fullChains: Chain[] = [];
+  // 全局模块树：树面板渲染、选中解析的唯一结构源
+  treeRoot: MNode | null = null;
+  private moduleByKey = new Map<string, MNode>();
+  private opByNodeId = new Map<number, MNode>();
+  // 当前层级物化状态：簇卡片 key 集合 / 直接可见（散列算子+IO）节点 id 集合
+  private cardKeys = new Set<string>();
+  private looseIds = new Set<number>();
   // 纯传递前缀（只含 1 个子组合、自身无算子）→ 不显示背景盒；折叠时下钻到唯一孩子
   private omit = new Set<string>();
   private omitChild = new Map<string, string>();
@@ -40,6 +47,7 @@ export class GraphModel {
   load(data: GraphData, k: number): void {
     this.data = data;
     this.computeOmit();
+    this.buildTree();
     this.levels = this.computeLevels();
     this.layoutFull();
     this.level = this.zoomToLevel(k);
@@ -78,6 +86,80 @@ export class GraphModel {
     return k;
   }
 
+  // 构建全局模块树：data.tree 提供完整模块层级（含未参与追踪的子模块与参数/缓冲叶子），
+  // 图算子按 group（自由算子）/ call_module·get_attr target（模块调用）挂到所属模块
+  private buildTree(): void {
+    this.treeRoot = null;
+    this.moduleByKey = new Map();
+    this.opByNodeId = new Map();
+    const t = this.data?.tree;
+    if (!t) return;
+    const flow = new Map<string, number>();
+    const touch = (path: string, i: number): void => {
+      const cur = flow.get(path);
+      if (cur === undefined || i < cur) flow.set(path, i);
+    };
+    const root: MNode = {
+      key: '', name: t.name || 'model', kind: 'module', cls: t.cls, params: t.params,
+      parent: null, children: [], others: [], ops: [], flowIdx: Infinity,
+    };
+    this.moduleByKey.set('', root);
+    this.treeRoot = root;
+    const walk = (tn: GNode, parent: MNode, prefix: string): void => {
+      for (const k of tn.children || []) {
+        const key = prefix ? `${prefix}.${k.name}` : k.name || '';
+        if (k.children !== undefined) {
+          const m: MNode = {
+            key, name: k.name || '', kind: 'module', cls: k.cls, params: k.params,
+            parent, children: [], others: [], ops: [], flowIdx: Infinity,
+          };
+          this.moduleByKey.set(key, m);
+          parent.children.push(m);
+          walk(k, m, key);
+        } else {
+          parent.others.push({
+            key, name: k.name || '', kind: k.cls === 'Buffer' ? 'buffer' : 'param',
+            cls: k.cls, params: k.params, shape: k.shape, dtype: k.dtype,
+            parent, children: [], others: [], ops: [], flowIdx: -1,
+          });
+        }
+      }
+    };
+    walk(t, root, '');
+    // 算子挂载 + 数据流首次触达序（子模块排序依据）
+    const attach = (nd: GNode, key: string, i: number): void => {
+      const owner = this.moduleByKey.get(key);
+      if (!owner) return;
+      const leaf: MNode = {
+        key, name: nd.name, kind: 'op', cls: nd.cls, out_shape: nd.out_shape, node: nd,
+        parent: owner, children: [], others: [], ops: [], flowIdx: i,
+      };
+      owner.ops.push(leaf);
+      this.opByNodeId.set(nd.id, leaf);
+    };
+    this.data!.nodes.forEach((nd, i) => {
+      const paths: string[] = [];
+      if (nd.group) paths.push(nd.group);
+      if (nd.kind === 'call_module' || nd.kind === 'get_attr') {
+        if (nd.target) {
+          paths.push(nd.target);
+          attach(nd, nd.target, i);
+        }
+      } else if (nd.kind === 'call_function' || nd.kind === 'call_method') {
+        if (nd.group) attach(nd, nd.group, i);
+      }
+      for (const p of paths) {
+        const segs = p.split('.');
+        for (let k = 1; k <= segs.length; k++) touch(segs.slice(0, k).join('.'), i);
+      }
+    });
+    const sortRec = (m: MNode): void => {
+      m.children.sort((a, b) => (flow.get(a.key) ?? Infinity) - (flow.get(b.key) ?? Infinity));
+      m.children.forEach(sortRec);
+    };
+    sortRec(root);
+  }
+
   private computeLevels(): number[] {
     const depths = new Set<number>();
     for (const nd of this.data!.nodes) if (nd.group) depths.add(nd.group.split('.').length);
@@ -108,6 +190,8 @@ export class GraphModel {
       this.nodes = this.fullNodes;
       this.idx = this.fullIdx;
       this.chains = this.fullChains;
+      this.cardKeys = new Set();
+      this.looseIds = new Set(this.nodes.map(n => n.id));
       this.computePanels(Math.max(0, ...src.nodes.filter(n => n.group).map(n => n.group!.split('.').length)));
       return;
     }
@@ -230,6 +314,9 @@ export class GraphModel {
     }
     this.nodes = nodes;
     this.idx = new Map(nodes.map(n => [n.id, n]));
+    // 物化状态：卡片 = 簇（消解后）；可见散列 = 非卡片的全部渲染节点（散列 IO + 被消解算子）
+    this.cardKeys = new Set(clusters.keys());
+    this.looseIds = new Set(nodes.filter(n => n.kind !== 'module-cluster').map(n => n.id));
 
     // 聚合边（去掉内部边；平行边保留，稍后错开绘制，不合并成一条箭头）
     const aggEdges: GEdge[] = [];
@@ -356,64 +443,69 @@ export class GraphModel {
     this.panels.sort((a, b) => (b.xMax - b.xMin) * (b.yMax - b.yMin) - (a.xMax - a.xMin) * (a.yMax - a.yMin));
   }
 
-  // ---------- 选中解析：跨层级传播（模块 ↔ 成员算子） ----------
+  // ---------- 选中解析：基于全局模块树（模块 ↔ 算子跨层级传播） ----------
 
   resolveSelection(sel: Selection | null): ResolvedSelection {
     const ids = new Set<number>();
     let primary: GNode | null = null;
-    if (sel) {
-      const D = this.levels[this.level];
-      if (!sel.group) {
-        const n = this.nodes.find(m => m.id === sel.id);
-        if (n) {
-          ids.add(n.id);
-          primary = n;
-        }
-      } else if (D === Infinity) {
-        if (sel.isCluster) {
-          const G = sel.group;
-          for (const n of this.nodes) {
-            if (n.group && (n.group === G || n.group.startsWith(G + '.'))) {
-              ids.add(n.id);
-              if (!primary) primary = n;
+    if (!sel) return { ids, primary };
+
+    const cardOf = (key: string): GNode | undefined =>
+      key ? this.nodes.find(n => n.clusterKey === key) : undefined;
+
+    // 1. 选中实体 → 树节点：卡片/背景盒 → 模块；算子 → 自身（可见时）或所属模块
+    let mod: MNode | null = null;
+    if (sel.isCluster || sel.id < 0) {
+      mod = this.moduleByKey.get(sel.group || '') ?? null;
+    } else {
+      const cur = this.idx.get(sel.id);
+      if (cur?.kind === 'module-cluster') {
+        mod = this.moduleByKey.get(cur.clusterKey || cur.group || '') ?? null;
+      } else {
+        const leaf = this.opByNodeId.get(sel.id);
+        if (leaf) {
+          if (this.looseIds.has(sel.id)) {
+            // 当前层级直接可见（散列算子）→ 只选它本身，不向所属模块扩散
+            const vis = this.idx.get(sel.id);
+            if (vis) return { ids: new Set([vis.id]), primary: vis };
+          }
+          // 已折叠进卡片 → 沿祖先链找最近的物化卡片
+          for (let a: MNode | null = leaf.parent; a; a = a.parent) {
+            if (a.key && this.cardKeys.has(a.key)) {
+              const card = cardOf(a.key);
+              if (card) return { ids: new Set([card.id]), primary: card };
             }
           }
-        } else {
-          const n = this.idx.get(sel.id);
-          if (n) {
-            ids.add(n.id);
-            primary = n;
-          }
+          return { ids, primary };
         }
-      } else {
-        const want = sel.isCluster ? sel.group : sel.group.split('.').slice(0, D).join('.');
-        // 精确卡片优先作为 primary，后代卡片（省略下钻的更深卡片）一并高亮
-        for (const n of this.nodes) {
-          if (n.clusterKey === want) {
-            ids.add(n.id);
-            if (!primary) primary = n;
-          }
+        // 树外节点（IO 等）：当前视图可见即单选
+        if (cur) return { ids: new Set([cur.id]), primary: cur };
+      }
+    }
+
+    // 2. 模块选中 → 子树在当前层级的全部物化内容：后代卡片 + 子树内所有可见散列算子
+    //（含被消解的下游模块的直属算子，如 stage2 里的 cat/getitem/pad）
+    if (mod) {
+      const take = (nd: GNode | undefined): void => {
+        if (!nd || ids.has(nd.id)) return;
+        ids.add(nd.id);
+        if (!primary) primary = nd;
+      };
+      if (this.cardKeys.has(mod.key)) take(cardOf(mod.key));
+      const walkSub = (m: MNode): void => {
+        for (const o of m.ops) if (this.looseIds.has(o.node!.id)) take(this.idx.get(o.node!.id));
+        for (const c of m.children) {
+          if (this.cardKeys.has(c.key)) take(cardOf(c.key));
+          else walkSub(c);
         }
-        for (const n of this.nodes) {
-          if (!n.clusterKey || ids.has(n.id)) continue;
-          if (n.clusterKey.startsWith(want + '.')) ids.add(n.id);
-        }
-        // 被消解的直属算子散列节点（无卡片）随所属模块一并高亮
-        for (const n of this.nodes) {
-          if (n.clusterKey || ids.has(n.id) || !n.group) continue;
-          if (n.group === want) ids.add(n.id);
-        }
-        // 当前层级比所选模块更粗（无精确/后代卡片）→ 只取包含它的最深祖先卡片，
-        // 不高亮整条祖先链（否则选中子模块会连着点亮 stem 等所有外层卡片）
-        if (!primary) {
-          let best: GNode | null = null;
-          for (const n of this.nodes) {
-            if (!n.clusterKey) continue;
-            if (want.startsWith(n.clusterKey + '.') && (!best || n.clusterKey.length > best.clusterKey!.length)) best = n;
-          }
-          if (best) {
-            ids.add(best.id);
-            primary = best;
+      };
+      walkSub(mod);
+      // 子树整体被折叠 → 沿祖先链找最近的物化卡片兜底
+      if (!ids.size) {
+        for (let a = mod.parent; a; a = a.parent) {
+          if (a.key && this.cardKeys.has(a.key)) {
+            take(cardOf(a.key));
+            break;
           }
         }
       }

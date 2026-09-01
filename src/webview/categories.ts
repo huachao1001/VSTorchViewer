@@ -23,7 +23,10 @@ export function nodeColor(nd: GNode): string {
   if (nd.kind === 'module-cluster') return '#6e5a8e'; // 组合卡片：深紫，与算子分类色区分
   if (nd.kind === 'placeholder') return '#6aa877';
   if (nd.kind === 'output') return '#c26a63';
-  const c = ((nd.cls || '') + ' ' + (nd.target || '')).toLowerCase();
-  for (const cat of CATS) if (cat.re.test(c)) return cat.color;
+  // 先按算子类名分类；模块路径（target）仅作兜底——路径可能含 "conv" 等误导片段
+  const cls = (nd.cls || '').toLowerCase();
+  for (const cat of CATS) if (cat.re.test(cls)) return cat.color;
+  const target = (nd.target || '').toLowerCase();
+  for (const cat of CATS) if (cat.re.test(target)) return cat.color;
   return '#7f919e';
 }

@@ -523,8 +523,8 @@ function showError(out: vscode.OutputChannel, e: unknown) {
 
 // ---------- 导出结果缓存 ----------
 // 结果落盘到 globalStorage；同一文件（mtime 未变）+ 同模型/输入再次打开时直接恢复，跳过 Python 导出
-// 结构格式变更时递增 CACHE_VERSION，旧缓存整体失效（v2：类清单含 params 表单数据）
-const CACHE_VERSION = '2';
+// 结构格式变更时递增 CACHE_VERSION，旧缓存整体失效（v3：修复类清单 params 缺首个参数的 bug）
+const CACHE_VERSION = '3';
 
 function cacheKey(parts: string[]): string {
   return crypto.createHash('sha1').update(parts.join('\u0000')).digest('hex').slice(0, 20);
@@ -588,18 +588,48 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
     let lastInput: string | undefined;
     let lastArgs: Record<string, string> | undefined;
     let lastRaw: string | undefined;
+    let scriptMtime = 0;
+    // 表单记忆：填过一次的参数按 (脚本, 模型) 记忆（内存 + 落盘），切回 tab 直接复用；
+    // 原始 .py 文件改动（mtime 变化）后失效，重新弹表单
+    const formMemo = new Map<string, { args?: Record<string, string>; raw?: string }>();
+    const readFormMemo = (model: string): { args?: Record<string, string>; raw?: string } | undefined => {
+      const e = readCache(context, cacheKey(['form', script, model]));
+      if (e && e.v === CACHE_VERSION && e.mtime === scriptMtime && (e.args || e.raw)) {
+        return { args: e.args, raw: e.raw };
+      }
+      return undefined;
+    };
+    const writeFormMemo = (model: string, memo: { args?: Record<string, string>; raw?: string }): void => {
+      writeCache(context, cacheKey(['form', script, model]), { v: CACHE_VERSION, mtime: scriptMtime, ...memo });
+    };
     const sender = openViewer(context, path.basename(script), async msg => {
       if (!exportOnce) return;
       if (msg?.type === 'export' && typeof msg.model === 'string' && classes.some(c => c.name === msg.model)) {
-        // 切换模型时清空上个模型的表单值，避免串用
-        if (msg.model !== currentModel) {
+        currentModel = msg.model;
+        if (msg.args && typeof msg.args === 'object' && Object.keys(msg.args).length) {
+          // 表单提交：记忆参数（内存 + 落盘）
+          lastArgs = msg.args as Record<string, string>;
+          lastRaw = undefined;
+          formMemo.set(msg.model, { args: lastArgs });
+          writeFormMemo(msg.model, { args: lastArgs });
+        } else if (typeof msg.raw === 'string' && msg.raw.trim()) {
+          lastRaw = msg.raw.trim();
+          lastArgs = undefined;
+          formMemo.set(msg.model, { raw: lastRaw });
+          writeFormMemo(msg.model, { raw: lastRaw });
+        } else {
+          // tab 点击（无新提交）：该模型填过表单则直接复用记忆，不重复弹表单
           lastArgs = undefined;
           lastRaw = undefined;
+          const memo = formMemo.get(msg.model) || readFormMemo(msg.model);
+          if (memo) {
+            formMemo.set(msg.model, memo);
+            lastArgs = memo.args;
+            lastRaw = memo.raw;
+            log(`命中表单记忆（${msg.model}），跳过表单直接导出`);
+          }
         }
-        currentModel = msg.model;
-        if (msg.args && typeof msg.args === 'object') lastArgs = msg.args as Record<string, string>;
-        if (typeof msg.raw === 'string' && msg.raw.trim()) lastRaw = msg.raw.trim();
-        // 需要构造参数且表单尚未提交 → 推送参数表单而不是直接导出（无参类直接导出）
+        // 需要构造参数且无任何记忆 → 推送参数表单（无参类直接导出）
         const cls = classes.find(c => c.name === msg.model);
         if (cls && !cls.instantiable && !lastArgs && !lastRaw) {
           log(`类 ${cls.name} 需要构造参数，推送参数表单`);
@@ -632,6 +662,7 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
     try {
       if (ext === '.py') {
         const fileMtime = fs.statSync(script).mtimeMs;
+        scriptMtime = fileMtime;
         // 1) 类清单缓存：脚本未改动时直接复用，跳过 --list 导出
         const classesKey = cacheKey(['cls', script]);
         let cachedClasses = readCache(context, classesKey);
@@ -652,6 +683,7 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
             const payload = cachedGraph.payload;
             payload.classes = classes;
             payload.model = first.name;
+            payload.__tvKey = graphKey;
             sender.post({ type: 'data', data: payload });
             return;
           }
@@ -693,41 +725,47 @@ async function visualize(context: vscode.ExtensionContext, out: vscode.OutputCha
           }
           return payload;
         };
-        // 表单值 → 构造表达式：值为 Python 字面量原样拼接，空值跳过（用类默认值）
-        const buildExpr = (model: string, args?: Record<string, string>): string | undefined => {
-          if (!args) return undefined;
-          const pairs = Object.entries(args)
-            .filter(([, v]) => v && v.trim())
-            .map(([k, v]) => `${k}=${v.trim()}`);
-          return `${model}(${pairs.join(', ')})`;
-        };
-        // 单次导出：input 形状可选；需要构造参数的类用表单值拼 --build 表达式
-        //（签名解析失败时 raw 为用户自由填写的参数串）；结果写缓存
+        // 表单值以 JSON 字典传给导出器（--args），Python 端 cls(**args) 字典方式实例化
+        // raw 为自由表达式兜底（签名解析失败时），仍走 --build
         exportOnce = async (model: string, input?: string, args?: Record<string, string>, raw?: string): Promise<any> => {
-          const expr0 = raw ? `${model}(${raw})` : buildExpr(model, args);
-          const gKey = cacheKey(['graph', script, model, input || '', expr0 || '']);
+          const hasArgs = !!args && Object.keys(args).length > 0;
+          const argKey = hasArgs ? JSON.stringify(args, Object.keys(args).sort()) : '';
+          const gKey = cacheKey(['graph', script, model, input || '', argKey || (raw ? `${model}(${raw})` : '')]);
+          const withKey = (p: any): any => {
+            if (p) p.__tvKey = gKey; // 供 webview 判断是否同一份数据（切 tab 命中缓存时跳过重渲染）
+            return attachMeta(p, model);
+          };
           const cachedGraph = readCache(context, gKey);
           if (cacheFresh(cachedGraph, fileMtime) && cachedGraph.payload) {
-            return attachMeta(cachedGraph.payload, model);
+            return withKey(cachedGraph.payload);
           }
           notify(`正在导出 ${model}…`);
           const args0 = [exporter, '--file', script, '--model', model];
-          if (expr0) args0.push('--build', expr0);
+          if (hasArgs) args0.push('--args', JSON.stringify(args));
+          else if (raw) args0.push('--build', `${model}(${raw})`);
           if (input) args0.push('--input', input);
           const payload = await runExport(out, pyList, [...args0, '--out', outFile], outFile, 180000, scriptDir, context, script);
           writeCache(context, gKey, { v: CACHE_VERSION, mtime: fileMtime, payload });
           log('导出结果已写入缓存');
-          return attachMeta(payload, model);
+          return withKey(payload);
         };
 
         // 4) tab 窗口已提前创建好（见上方 type: 'tabs'），此处自动渲染默认 tab：
-        //    优先选可直接实例化的类立即导出；需要构造参数的类不阻塞，等用户点 tab 时再弹表单
+        //    优先选可直接实例化的类立即导出；需要构造参数的类：有表单记忆则直接复用，否则弹表单
         const def = classes.find(c => c.instantiable) || classes[0];
         currentModel = def.name;
         if (!def.instantiable) {
-          // 全部类都需要构造参数：自动弹出第一个类的参数表单，无需用户额外操作
-          sender.post({ type: 'form', model: def.name, classes });
-          return;
+          const memo = formMemo.get(def.name) || readFormMemo(def.name);
+          if (memo) {
+            formMemo.set(def.name, memo);
+            lastArgs = memo.args;
+            lastRaw = memo.raw;
+            log(`命中表单记忆（${def.name}），跳过表单直接导出`);
+          } else {
+            // 全部类都需要构造参数且无记忆：自动弹出第一个类的参数表单，无需用户额外操作
+            sender.post({ type: 'form', model: def.name, classes });
+            return;
+          }
         }
         const payload = await exportOnce(def.name);
         if (!payload) throw new Error('导出进程结束但未写出结果文件');
@@ -773,12 +811,12 @@ function openViewer(
   <div id="tree-panel"></div>
   <div id="tree-splitter" title="拖拽调整宽度"></div>
   <div id="graph-area">
+    <!-- 基础 svg 仅承担 marker 箭头 defs（各 tab 会话 svg 通过 CSS url(#arrow) 跨引用）；渲染发生在动态创建的会话容器中 -->
     <svg id="svg">
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#c9d6e2"></path></marker>
         <marker id="arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#f5a623"></path></marker>
       </defs>
-      <g id="viewport"><g id="panels"></g><g id="nodes"></g><g id="edges"></g></g>
     </svg>
     <div id="tv-loading"><div class="spinner"></div><div class="tv-loading-text">正在准备…</div></div>
   </div>

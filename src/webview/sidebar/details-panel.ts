@@ -11,6 +11,8 @@ export class DetailsPanel {
   private shapeInput: HTMLInputElement;
 
   constructor(private container: HTMLElement, applyShape?: (shape: string) => void) {
+    // 每个会话有自己的面板实例但共享同一容器：挂载前清空，避免多会话 DOM 叠加
+    container.innerHTML = '';
     this.body = document.createElement('div');
     this.body.className = 'details-body';
     this.footer = document.createElement('div');
@@ -39,7 +41,23 @@ export class DetailsPanel {
     container.append(this.body, this.footer);
   }
 
+  // 会话切换后本实例的 DOM 可能被其他会话顶掉：重新挂载（输入形状等状态保留在元素上）
+  private ensureMounted(): void {
+    if (!this.body.isConnected) {
+      this.container.innerHTML = '';
+      this.container.append(this.body, this.footer);
+    }
+  }
+
+  // 会话无数据（如参数表单态）：右侧显示占位提示
+  showPlaceholder(text: string): void {
+    this.ensureMounted();
+    this.body.innerHTML = `<div class="hint">${esc(text)}</div>`;
+    this.summaryEl.innerHTML = '';
+  }
+
   show(nd: GNode | null, data: GraphData | null): void {
+    this.ensureMounted();
     this.showSummary(data);
     if (!nd) {
       this.showMeta(data);

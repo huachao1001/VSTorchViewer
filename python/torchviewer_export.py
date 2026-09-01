@@ -77,7 +77,9 @@ def find_module_classes(mod):
 
 
 def class_params(cls):
-    # 构造参数表（跳过 self 和 *args/**kwargs）：名称 / 是否必填 / 默认值 repr（Python 字面量，可直接回填表单）
+    # 构造参数表（名称 / 是否必填 / 默认值 repr，Python 字面量可直接回填表单）
+    # 注意：inspect.signature(类) 返回的参数已自动去掉 self，不能再 [1:] 跳第一个，
+    # 否则会把首个真实参数（如 channels）误跳过
     import inspect
 
     try:
@@ -85,7 +87,11 @@ def class_params(cls):
     except (TypeError, ValueError):
         return []
     out = []
-    for p in list(sig.parameters.values())[1:]:
+    plist = list(sig.parameters.values())
+    # 防御：极少数情况下签名仍带 self/cls，按名跳过
+    if plist and plist[0].name in ("self", "cls"):
+        plist = plist[1:]
+    for p in plist:
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
         item = {"name": p.name, "required": p.default is p.empty}
@@ -105,15 +111,36 @@ def class_params(cls):
     return out
 
 
-def build_model(mod, cls_name, expr):
+def build_model(mod, cls_name, expr, args_json=""):
+    # 字典方式实例化优先：--args 传 JSON 字典（表单 值为 Python 字面量字符串，逐个 ast.literal_eval 还原类型）
+    # --build 仅作为自由表达式兜底
+    import ast
+
     import torch.nn as nn
 
+    cls = getattr(mod, cls_name)
+    if args_json:
+        try:
+            raw = json.loads(args_json)
+        except Exception as e:
+            raise RuntimeError(f"--args 不是合法 JSON：{e}")
+        if not isinstance(raw, dict):
+            raise RuntimeError("--args 必须是 JSON 对象（参数名 → 值 的字典）")
+        kwargs = {}
+        for k, v in raw.items():
+            if isinstance(v, str):
+                try:
+                    kwargs[k] = ast.literal_eval(v)
+                except Exception:
+                    kwargs[k] = v
+            else:
+                kwargs[k] = v
+        return cls(**kwargs)
     if expr:
         model = eval(expr, vars(mod))
         if not isinstance(model, nn.Module):
             raise RuntimeError(f"{expr} 不是 nn.Module")
         return model
-    cls = getattr(mod, cls_name)
     try:
         return cls()
     except TypeError as e:
@@ -615,6 +642,7 @@ def main():
     ap.add_argument("--file", help="目标 .py 文件")
     ap.add_argument("--model", help="nn.Module 类名")
     ap.add_argument("--build", help='构造表达式，如 "Model(num_classes=10)"')
+    ap.add_argument("--args", default="", help='构造参数 JSON 字典，如 \'{"channels": 8}\'（推荐，cls(**args) 字典方式实例化）')
     ap.add_argument("--input", default="", help="输入形状，多输入用 ; 分隔；留空则不计算形状")
     ap.add_argument("--list", action="store_true", help="列出候选模型类")
     ap.add_argument("--out", required=True, help="输出 JSON 路径")
@@ -648,7 +676,7 @@ def main():
             if a.model and a.model not in classes:
                 raise RuntimeError(f"{a.model} 不是该文件中定义的 nn.Module 子类（候选：{'、'.join(classes)}）")
             model_name = a.model or classes[0]
-            model = build_model(mod, model_name, a.build)
+            model = build_model(mod, model_name, a.build, a.args)
             data = export_graph(model, parse_input(a.input) if a.input.strip() else None, model_name)
             _write(a.out, data)
             sys.exit(0)

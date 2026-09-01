@@ -78,6 +78,25 @@ export interface GraphData {
   classes?: { name: string; instantiable: boolean; params?: { name: string; required: boolean; default?: string; annotation?: string }[] }[];
 }
 
+// 全局模块树节点：左侧树面板、拓扑图折叠、选中解析的唯一结构源。
+// 由导出数据的 tree（完整模块层级，含参数/缓冲叶子）+ nodes（算子按 group/target 挂载）合并构建。
+export interface MNode {
+  key: string; // 全路径；根为 ''
+  name: string; // 最后一段；根为模型名
+  kind: 'module' | 'op' | 'param' | 'buffer';
+  cls?: string;
+  params?: number;
+  shape?: number[]; // param/buffer
+  dtype?: string;
+  out_shape?: number[]; // op
+  node?: GNode; // op → 源图节点
+  parent: MNode | null;
+  children: MNode[]; // 子模块（按图执行序）
+  others: MNode[]; // 参数/缓冲叶子
+  ops: MNode[]; // 直属算子（图执行序）
+  flowIdx: number; // 数据流首次触达序（子模块排序用）
+}
+
 // 选中记忆：跨层级传播（模块 ↔ 成员算子）
 export interface Selection {
   id: number;

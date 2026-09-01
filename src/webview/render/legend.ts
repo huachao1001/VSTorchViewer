@@ -5,7 +5,8 @@ import { CATS, nodeColor } from '../categories';
 import { isIO } from '../node-metrics';
 
 export function renderLegend(nodes: GNode[], area: HTMLElement): void {
-  let leg = document.getElementById('legend');
+  // 图例按会话（area）隔离：每个 tab 会话有自己的图例，不能跨会话用 document.getElementById 共享
+  let leg = area.querySelector('#legend') as HTMLElement | null;
   if (!leg) {
     leg = document.createElement('div');
     leg.id = 'legend';

@@ -3,3 +3,4 @@ out/
 media/main.js
 *.log
 .codegraph/__pycache__/
+*.pyc

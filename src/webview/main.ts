@@ -16,27 +16,64 @@ declare function acquireVsCodeApi(): {
 };
 const vscode = acquireVsCodeApi();
 
-const svg = document.getElementById('svg') as unknown as SVGSVGElement;
-const viewport = document.getElementById('viewport') as unknown as SVGGElement;
-const panelsG = document.getElementById('panels') as unknown as SVGGElement;
-const edgesG = document.getElementById('edges') as unknown as SVGGElement;
-const nodesG = document.getElementById('nodes') as unknown as SVGGElement;
+const graphArea = document.getElementById('graph-area')!;
+const detailsEl = document.getElementById('details')!;
+const treeEl = document.getElementById('tree-panel')!;
 
-const model = new GraphModel();
-const view = new GraphView(model, {
-  svg,
-  viewport,
-  panelsG,
-  edgesG,
-  nodesG,
-  graphArea: document.getElementById('graph-area')!,
-  details: document.getElementById('details')!,
-  tree: document.getElementById('tree-panel')!,
-}, {
-  // 输入形状在预览界面内提交，重导出后由扩展推送新数据
-  applyShape: shape => vscode.postMessage({ type: 'input', shape }),
-});
-view.init();
+// 每个 nn.Module tab 一个独立会话：自己的 svg / GraphModel / GraphView / 表单层
+// 切换 tab 只切换会话容器可见性，已渲染 DOM 与缩放/平移/选中状态原样保留，不重建
+interface Session {
+  wrap: HTMLDivElement;
+  view: GraphView;
+  formLayer: HTMLDivElement; // 本会话的构造参数表单层（属于 tab content，随 tab 整体切换）
+  lastKey?: string; // 最近一次渲染数据的缓存键（同一份数据重复推送时跳过重渲染）
+}
+const sessions = new Map<string, Session>();
+let activeSession: Session | undefined;
+
+function getSession(name: string): Session {
+  let s = sessions.get(name);
+  if (s) return s;
+  const wrap = document.createElement('div');
+  wrap.className = 'session';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg') as unknown as SVGSVGElement;
+  const viewport = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const panelsG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const nodesG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const edgesG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  viewport.append(panelsG, nodesG, edgesG);
+  svg.appendChild(viewport);
+  wrap.appendChild(svg);
+  graphArea.appendChild(wrap);
+  // marker 箭头定义在基础 #svg 的 defs 中，各会话 svg 通过 CSS url(#arrow) 跨引用
+  const view = new GraphView(new GraphModel(), {
+    svg,
+    viewport,
+    panelsG,
+    edgesG,
+    nodesG,
+    graphArea: wrap,
+    details: detailsEl,
+    tree: treeEl,
+  }, {
+    // 输入形状在预览界面内提交，重导出后由扩展推送新数据
+    applyShape: shape => vscode.postMessage({ type: 'input', shape }),
+  });
+  view.init();
+  const formLayer = document.createElement('div');
+  formLayer.className = 'tv-form-layer';
+  wrap.appendChild(formLayer);
+  s = { wrap, view, formLayer };
+  sessions.set(name, s);
+  return s;
+}
+
+function setActiveSession(s: Session): void {
+  if (activeSession === s) return;
+  for (const t of sessions.values()) t.wrap.style.display = t === s ? 'block' : 'none';
+  activeSession = s;
+  s.view.activate();
+}
 
 // 顶部 tab：同文件多个 nn.Module 之间切换（请求扩展重导出对应类）
 const tabs = document.getElementById('model-tabs')!;
@@ -95,7 +132,10 @@ if (splitter) {
 }
 
 // 调试/测试钩子
-(window as unknown as { __tv?: unknown }).__tv = { model, view };
+(window as unknown as { __tv?: unknown }).__tv = {
+  sessions,
+  getActive: () => activeSession,
+};
 
 // 加载遮罩：解析期间显示进度（转圈 + 文字），失败显示错误（点击关闭）
 // 日志不在这里展示：统一走 VS Code 输出面板（TorchViewer）
@@ -148,28 +188,35 @@ function showLoadError(message: string): void {
   const t = el.querySelector('.tv-loading-text') as HTMLElement;
   if (t) t.textContent = `${message}（点击关闭）`;
 }
-// 表单填写期间出错（如导出失败）：错误提示显示在表单内，表单保留供修改重填，不关闭
+// 表单填写期间出错（如导出失败）：错误提示显示在当前会话的表单内，表单保留供修改重填，不关闭
 function showFormError(message: string): void {
-  const el = ensureLoading();
-  const hint = el.querySelector('.f-error') as HTMLElement | null;
+  const layer = activeSession?.formLayer;
+  if (!layer) {
+    showLoadError(message);
+    return;
+  }
+  const hint = layer.querySelector('.f-error') as HTMLElement | null;
   if (hint) hint.textContent = message;
-  const btn = el.querySelector('.f-apply') as HTMLButtonElement | null;
+  const btn = layer.querySelector('.f-apply') as HTMLButtonElement | null;
   if (btn) {
     btn.disabled = false;
     btn.textContent = '导出';
   }
-  el.style.display = 'flex';
 }
 // 构造参数表单：需要传参的 nn.Module 逐参数输入（Python 字面量，默认值预填）
-function renderForm(model: string, classes: ClsInfo[]): void {
-  const el = ensureLoading();
-  el.classList.remove('error');
-  el.classList.add('form');
-  el.style.display = 'flex';
+// 表单渲染进所属会话的 formLayer（tab content 的一部分，随 tab 整体切换）；已有同模型表单则直接显示，保留已填内容
+function renderForm(s: Session, model: string, classes: ClsInfo[]): void {
+  const layer = s.formLayer;
+  if (layer.dataset.model === model && layer.querySelector('.tv-form')) {
+    layer.style.display = 'flex';
+    return;
+  }
+  layer.dataset.model = model;
+  layer.style.display = 'flex';
   const cls = classes.find(c => c.name === model);
   const params = cls?.params || [];
-  el.innerHTML = `<div class="tv-loading-text"><b>${esc(model)}</b> 构造参数</div><div class="tv-form"></div>`;
-  const form = el.querySelector('.tv-form') as HTMLElement;
+  layer.innerHTML = `<div class="tv-loading-text"><b>${esc(model)}</b> 构造参数</div><div class="tv-form"></div>`;
+  const form = layer.querySelector('.tv-form') as HTMLElement;
   const inputs = new Map<string, HTMLInputElement>();
   // 签名解析失败（params 为空）时退化为单个自由输入框：用户直接填完整构造参数
   let rawInput: HTMLInputElement | undefined;
@@ -182,7 +229,7 @@ function renderForm(model: string, classes: ClsInfo[]): void {
     rawInput = document.createElement('input');
     rawInput.className = 'f-input';
     rawInput.spellcheck = false;
-    rawInput.placeholder = '如 32 或 channels=32, kernel_size=3';
+    rawInput.placeholder = '参数字典：channels=8, kernel_size=3';
     row.append(label, rawInput);
     form.appendChild(row);
   }
@@ -272,8 +319,20 @@ window.addEventListener('message', e => {
   if (m2.type === 'data' && m2.data) {
     formActive = false;
     hideProgress();
-    view.onData(m2.data as GraphData);
-    renderTabs(m2.data.classes, m2.data.model);
+    const data = m2.data as GraphData;
+    const name = String(data.model || data.classes?.[0]?.name || '');
+    const s = getSession(name);
+    const key = String((data as unknown as { __tvKey?: string }).__tvKey || '');
+    setActiveSession(s);
+    // 导出成功：隐藏该会话的表单层，显示结构图
+    s.formLayer.style.display = 'none';
+    if (s.lastKey !== key || !key) {
+      // 新数据（首次导出 / 参数或文件变更）→ 渲染进该会话；已有会话 DOM 不受影响
+      s.lastKey = key;
+      s.view.onData(data);
+    }
+    // 同一份数据重复推送（切回 tab 命中缓存）→ 只切换可见性，不重渲染
+    renderTabs(data.classes, name);
   } else if (m2.type === 'progress') {
     // 表单填写期间忽略进度消息，保持表单原样（表单提交后按钮已是"导出中…"）
     if (!formActive) showProgress(String(m2.text || '正在解析…'));
@@ -283,8 +342,14 @@ window.addEventListener('message', e => {
   } else if (m2.type === 'tabs') {
     renderTabs(m2.classes, m2.model);
   } else if (m2.type === 'form' && m2.model) {
-    renderTabs(m2.classes, m2.model);
-    renderForm(String(m2.model), m2.classes || []);
+    // 表单是 tab content 的一部分：切换到该会话（图区显示表单，左树/右详情切到本会话空状态）
+    const name = String(m2.model);
+    const s = getSession(name);
+    setActiveSession(s);
+    hideProgress();
+    formActive = true;
+    renderForm(s, name, m2.classes || []);
+    renderTabs(m2.classes, name);
   }
 });
 
